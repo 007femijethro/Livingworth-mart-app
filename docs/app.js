@@ -126,12 +126,16 @@ function stockRows() {
   const results = activeProducts().filter(product => (product.name.toLowerCase().includes(term)
     || (product.category || '').toLowerCase().includes(term) || (product.barcode || '').toLowerCase().includes(term))
     && (stockFilter === 'all' || (stockFilter === 'out' ? product.quantity === 0 : product.quantity > 0 && product.quantity <= product.low)));
-  return '<p class="muted">' + results.length + (results.length === 1 ? ' item' : ' items') + '</p>'
-    + list(results.map(product => '<div class="row"><span><strong>' + escape(product.name) + '</strong><br><small>' + escape(product.category || 'Other') + (product.sample ? ' · Starter item' : '') + '</small></span><span class="stock-actions"><strong>' + escape(stockLabel(product)) + '</strong><button class="secondary" data-stock-item="' + product.id + '">Details</button>' + (isAdmin() ? '<button type="button" class="delete-link" data-delete-item="' + product.id + '" aria-label="Delete ' + escape(product.name) + '">Delete</button>' : '') + '</span></div>'), 'No matching products.');
+  return '<p class="results-count" role="status">' + results.length + (results.length === 1 ? ' item' : ' items') + '</p>'
+    + (results.length ? '<div class="inventory-table"><table><thead><tr><th scope="col">Product</th><th scope="col">On hand</th><th scope="col">Availability</th><th scope="col">Actions</th></tr></thead><tbody>'
+      + results.map(product => {
+        const status = product.quantity === 0 ? ['out','Out of stock'] : product.quantity <= product.low ? ['low','Low stock'] : ['ready','In stock'];
+        return '<tr><th scope="row">' + escape(product.name) + '<small>' + escape(product.category || 'Other') + (product.sample ? ' · Starter item' : '') + '</small></th><td>' + escape(stockLabel(product)) + '</td><td><span class="availability ' + status[0] + '">' + status[1] + '</span></td><td><span class="stock-actions"><button class="secondary" data-stock-item="' + product.id + '">Details</button>' + (isAdmin() ? '<button type="button" class="delete-link" data-delete-item="' + product.id + '" aria-label="Delete ' + escape(product.name) + '">Delete</button>' : '') + '</span></td></tr>';
+      }).join('') + '</tbody></table></div>' : '<div class="empty-order">No products match your search and filters.</div>');
 }
 
 function stock() {
-  const inventory = panel('Stock on hand', '<label>Search stock<input id="stock-search" type="search" placeholder="Product, category or barcode" value="' + escape(stockQuery) + '"></label><label>Stock level<select id="stock-filter">' + [['all','All stock'],['low','Low stock'],['out','Out of stock']].map(([value,label]) => '<option value="' + value + '"' + (value === stockFilter ? ' selected' : '') + '>' + label + '</option>').join('') + '</select></label><div id="stock-results">' + stockRows() + '</div>');
+  const inventory = panel('Stock on hand', '<div class="inventory-filters"><label>Search stock<input id="stock-search" type="search" placeholder="Product, category or barcode" value="' + escape(stockQuery) + '"></label><label>Stock level<select id="stock-filter">' + [['all','All stock'],['low','Low stock'],['out','Out of stock']].map(([value,label]) => '<option value="' + value + '"' + (value === stockFilter ? ' selected' : '') + '>' + label + '</option>').join('') + '</select></label></div><div id="stock-results">' + stockRows() + '</div>');
   const details = popup('stock-item','Product details','<div id="stock-details"></div>');
   const waterSetup = waterEntries();
   const waterNotice = waterSetup ? panel('Combine Pure Water stock', '<p>The two Pure Water entries need one shared balance. Combine them to make the sachets inside each bag available at checkout.</p>'
@@ -171,8 +175,8 @@ function sell() {
   }).join('');
   const payment = '<fieldset class="payment-methods"><legend>Payment method</legend>' + methods.map((method,index) => '<label><input type="radio" name="method" value="' + method + '"' + (index ? '' : ' checked') + '><span>' + method + '</span></label>').join('') + '</fieldset><label id="tender">Cash received (₦)<input name="tender" type="number" min="0" step="0.01" inputmode="decimal" required></label><output id="change"></output><label id="reference" hidden>Terminal or transfer reference<input name="reference" maxlength="150" placeholder="Optional"></label><label id="payment-confirm" class="checkbox" hidden><input type="checkbox" name="confirmed">I checked that payment was received</label>';
   const receipt = lastSale ? popup('receipt','Sale receipt', '<p>' + escape(lastSale.method) + ' · ' + time(lastSale.at) + '</p>' + list(lastSale.lines.map(line => row(escape(line.quantity + ' × ' + line.name + ' · ' + line.label),money(line.price * line.quantity))), '') + row('Total paid',money(lastSale.total))) : '';
-  return '<div class="register-bar">' + register + '</div>' + waterNotice + '<div class="pos-layout"><section class="catalogue-pane" aria-label="Products"><label class="search-label">Find a product<input id="search" type="search" autocomplete="off" placeholder="Search name or barcode" value="' + escape(sellQuery) + '"></label><div class="departments" aria-label="Product categories">' + departmentsBar + '</div><div id="matches" class="product-grid"></div></section>'
-    + '<section class="order-pane" aria-label="Current order"><header class="row"><h2>Current order</h2><span class="pill">' + count + (count === 1 ? ' item' : ' items') + '</span></header><div class="order-items">' + (order || '<div class="empty-order"><strong>Your order is empty</strong><p>Select a product to begin.</p></div>') + '</div><footer>' + row('Total due',money(due)) + (lines.length ? launch('payment','Take payment') : '<button disabled>Take payment</button>') + (lastSale ? '<button class="secondary" data-dialog="receipt">Last sale receipt</button>' : '') + '</footer></section></div>'
+  return '<div class="register-bar">' + register + (count ? '<button class="secondary jump-order" data-jump-order>View order · ' + money(due) + '</button>' : '') + '</div>' + waterNotice + '<div class="pos-layout"><section class="catalogue-pane" aria-label="Products"><label class="search-label">Find a product<input id="search" type="search" autocomplete="off" placeholder="Search name or barcode" value="' + escape(sellQuery) + '"></label><div class="departments" aria-label="Product categories">' + departmentsBar + '</div><div id="matches" class="product-grid"></div></section>'
+    + '<section id="current-order" class="order-pane" aria-label="Current order" tabindex="-1"><header class="row"><h2>Current order</h2><span class="pill">' + count + (count === 1 ? ' item' : ' items') + '</span></header><div class="order-items">' + (order || '<div class="empty-order"><strong>Your order is empty</strong><p>Select a product to begin.</p></div>') + '</div><footer>' + row('Total due',money(due)) + (lines.length ? launch('payment','Take payment') : '<button disabled>Take payment</button>') + (lastSale ? '<button class="secondary" data-dialog="receipt">Last sale receipt</button>' : '') + '</footer></section></div>'
     + popup('open','Open register',form('open',amount('Opening cash'),'Open register'))
     + popup('pick','Selling options','<div id="selling-details"></div>')
     + (lines.length ? popup('payment','Take payment · ' + money(due),form('sale',payment,'Complete sale')) : '')
@@ -252,7 +256,7 @@ function render() {
   if (!allowed.includes(page)) page = 'Home';
   const navLabels = {Sell:'Checkout',Home:'Overview',Stock:'Inventory','Cash Drawer':'Register',Reports:'Reports',Staff:'Staff'};
   nav.innerHTML = allowed.map(name => '<button data-page="' + name + '"' + (page === name ? ' aria-current="page"' : '') + '>' + navLabels[name] + '</button>').join('') + '<button data-signout>Sign out</button>';
-  app.innerHTML = '<div class="eyebrow">' + escape(user.name) + ' · ' + (isAdmin() ? 'Admin' : 'Seller') + ' · ' + time(Date.now()).split(' at ')[0] + '</div><h1>' + navLabels[page] + '</h1>'
+  app.innerHTML = '<div class="page-heading"><h1>' + navLabels[page] + '</h1><div class="operator"><span class="operator-initial" aria-hidden="true">' + escape(user.name.charAt(0).toUpperCase()) + '</span><span><strong>' + escape(user.name) + '</strong><small>' + (isAdmin() ? 'Admin' : 'Seller') + '</small></span></div></div>'
     + ({Home:home, Sell:sell, Stock:stock, 'Cash Drawer':drawer, Reports:reports, Staff:staffPage}[page])();
   matches();
   fillPricing();
@@ -270,6 +274,12 @@ function previewMerge(merge) {
 document.addEventListener('click', event => {
   const button = event.target.closest('button');
   if (!button) return;
+  if (button.hasAttribute('data-jump-order')) {
+    const order = document.querySelector('#current-order');
+    order.focus({preventScroll:true});
+    order.scrollIntoView({block:'nearest'});
+    return;
+  }
   if (button.dataset.category !== undefined) {
     category = Number(button.dataset.category) ? departments[Number(button.dataset.category)] : '';
     for (const tab of document.querySelectorAll('[data-category]')) tab.setAttribute('aria-pressed', String(tab === button));
