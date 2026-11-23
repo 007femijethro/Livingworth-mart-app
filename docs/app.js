@@ -53,6 +53,11 @@ let reportDay = day.format(new Date());
 let timer;
 
 function message(value) {
+  const status = document.querySelector('dialog[open] .dialog-status');
+  if (status) {
+    status.textContent = value;
+    return;
+  }
   notice.textContent = value;
   clearTimeout(timer);
   timer = setTimeout(() => { notice.textContent = ''; }, 5000);
@@ -103,22 +108,32 @@ function fillPricing() {
   editor.elements.bulkPrice.value = product.bulkLabel ? sellingOptions(product)[1].price / 100 : '';
 }
 
+const popup = (id,title,body) => '<dialog id="dialog-' + id + '" aria-labelledby="title-' + id + '"><header><h2 id="title-' + id + '">' + escape(title) + '</h2><button type="button" class="secondary" data-dismiss aria-label="Close dialog">Close</button></header><div class="dialog-body">' + body + '</div><p class="dialog-status" role="status"></p></dialog>';
+const launch = (id,label) => '<button type="button" data-dialog="' + id + '">' + label + '</button>';
+function openPopup(id) {
+  const dialog = document.querySelector('#dialog-' + id);
+  document.querySelector('dialog[open]')?.close();
+  dialog?.showModal();
+}
+
+function stockRows(query = '') {
+  const term = query.trim().toLowerCase();
+  return list(activeProducts().filter(product => product.name.toLowerCase().includes(term) || (product.category || '').toLowerCase().includes(term)).map(product => '<div class="row"><span><strong>' + escape(product.name) + '</strong><br><small>' + escape(product.category || 'Other') + (product.sample ? ' · Starter item' : '') + '</small></span><span class="stock-actions"><strong>' + escape(stockLabel(product)) + '</strong><button class="secondary" data-stock-item="' + product.id + '">Details</button></span></div>'), 'No matching products.');
+}
+
 function stock() {
-  const inventory = panel('Stock on hand', list(activeProducts().map(product => row(
-    escape(product.name) + (product.sample ? ' <small class="muted">Starter item</small>' : '') + '<br><small>' + sellingOptions(product).map(option => escape(option.label) + ' ' + money(option.price)).join(' · ') + '</small>',
-    escape(stockLabel(product)))), 'No products have been added.'));
+  const inventory = panel('Stock on hand', '<label>Search stock<input id="stock-search" type="search" placeholder="Product or category"></label><div id="stock-results">' + stockRows() + '</div>');
+  const details = popup('stock-item','Product details','<div id="stock-details"></div>');
   const waterSetup = waterEntries();
   const waterNotice = waterSetup ? panel('Combine Pure Water stock', '<p>The two Pure Water entries need one shared balance. Combine them to make the sachets inside each bag available at checkout.</p>'
     + (isAdmin() ? '<button type="button" data-water-setup>Set up Pure Water</button>' : '<p>Ask an admin to combine the entries.</p>')) : '';
-  if (!isAdmin()) return waterNotice + inventory;
-  const starterNote = activeProducts().some(product => product.sample)
-    ? panel('Starter catalogue', '<p>Starter items have example prices and opening counts. Set the actual prices under Set selling options and enter actual quantities using Stock count.</p>') : '';
+  if (!isAdmin()) return waterNotice + inventory + details;
   const adjust = activeProducts().length ? form('adjust', selectProduct('id','Product') + '<label>Movement<select name="kind">' + options(movementKinds) + '</select></label>' + counter('quantity','Quantity') + field('reason','Reason or delivery reference'), 'Save movement') : '<p>Add a product to record a movement.</p>';
-  const setup = activeProducts().length ? panel('Set selling options', form('pricing', selectProduct('id','Product') + unitField + groupFields + bulkFields, 'Save selling options')) : '';
-  const merge = activeProducts().length > 1 ? panel('Combine existing products', form('merge', selectProduct('id','Keep this product (base units)') + selectProduct('source','Convert this product (bags or cartons)') + unitField + groupFields + bulkFields + '<output id="conversion"></output>', 'Combine products')) : '';
-  return waterNotice + starterNote + inventory + '<div class="grid">'
-    + panel('Add product',form('product',field('name','Product name') + field('barcode','Barcode',false) + '<label>Category<select name="category">' + options(categories) + '</select></label>' + unitField + groupFields + bulkFields + counter('quantity','Opening base units') + counter('low','Low-stock threshold in base units'), 'Add product'))
-    + panel('Record stock movement',adjust) + setup + merge + '</div>';
+  const setup = activeProducts().length ? popup('pricing','Set selling options', form('pricing', selectProduct('id','Product') + unitField + groupFields + bulkFields, 'Save selling options')) : '';
+  const merge = activeProducts().length > 1 ? popup('merge','Combine existing products', form('merge', selectProduct('id','Keep this product (base units)') + selectProduct('source','Convert this product (bags or cartons)') + unitField + groupFields + bulkFields + '<output id="conversion"></output>', 'Combine products')) : '';
+  return '<div class="toolbar">' + launch('product','Add product') + (activeProducts().length ? launch('adjust','Record movement') : '') + (merge ? launch('merge','Combine products') : '') + '</div>'
+    + waterNotice + inventory + details + popup('product','Add product',form('product',field('name','Product name') + field('barcode','Barcode',false) + '<label>Category<select name="category">' + options(categories) + '</select></label>' + unitField + groupFields + bulkFields + counter('quantity','Opening base units') + counter('low','Low-stock threshold in base units'), 'Add product'))
+    + popup('adjust','Record stock movement',adjust) + setup + merge;
 }
 
 function sell() {
@@ -128,7 +143,9 @@ function sell() {
   const waterNotice = waterEntries() ? panel('Pure Water stock setup', '<p>Pure Water has two product entries. Combine them in Stock so the sachets inside the bags can be sold from the same balance.</p>' + (isAdmin() ? '<button data-page="Stock">Go to Stock</button>' : '')) : '';
   return waterNotice + '<div class="grid">' + panel('Find a product', '<label>Search by name, barcode or category<input id="search" type="search" autocomplete="off"></label><div id="matches" class="list"></div>')
     + panel('Cart', list(lines.map(line => '<div class="row"><strong>' + escape(line.name + ' · ' + line.label) + '</strong><span>' + line.quantity + ' × ' + money(line.price) + '</span><button class="secondary" data-remove="' + line.key + '">Remove one</button></div>'), 'Add products to start a sale.')
-    + '<p><strong>Total ' + money(due) + '</strong></p>' + (lines.length ? form('sale', '<label>Payment method<select name="method">' + options(methods) + '</select></label><label id="tender">Cash received (₦)<input name="tender" type="number" min="0" step="0.01" required></label><output id="change"></output><label id="reference" hidden>Terminal or transfer reference<input name="reference" maxlength="150" placeholder="Optional"></label><label id="payment-confirm" class="checkbox" hidden><input type="checkbox" name="confirmed">I checked that payment was received</label>', 'Complete sale') : '')) + '</div>';
+    + '<p><strong>Total ' + money(due) + '</strong></p>' + (lines.length ? launch('payment','Take payment') : '')) + '</div>'
+    + popup('pick','Selling options','<div id="selling-details"></div>')
+    + (lines.length ? popup('payment','Take payment · ' + money(due), form('sale', '<label>Payment method<select name="method">' + options(methods) + '</select></label><label id="tender">Cash received (₦)<input name="tender" type="number" min="0" step="0.01" required></label><output id="change"></output><label id="reference" hidden>Terminal or transfer reference<input name="reference" maxlength="150" placeholder="Optional"></label><label id="payment-confirm" class="checkbox" hidden><input type="checkbox" name="confirmed">I checked that payment was received</label>', 'Complete sale')) : '');
 }
 
 function matches(query = '') {
@@ -136,18 +153,25 @@ function matches(query = '') {
   if (!target) return;
   const search = query.trim().toLowerCase();
   const found = activeProducts().filter(product => product.name.toLowerCase().includes(search) || product.barcode.includes(search) || (product.barcodes || []).some(code => code.includes(search)) || (product.category || '').toLowerCase().includes(search));
-  const used = new Map();
-  for (const line of cartLines(state,cart)) used.set(line.id,(used.get(line.id) || 0) + line.units);
-  target.innerHTML = found.map(product => '<div><strong>' + escape(product.name) + '</strong><p class="muted">' + escape(stockLabel(product)) + '</p><div class="sell-options">'
-    + sellingOptions(product).map((option,index) => '<div class="sell-option"><button data-add="' + product.id + ':' + index + '" ' + (product.quantity - (used.get(product.id) || 0) < option.units ? 'disabled' : '') + '>' + escape(option.label) + ' · ' + money(option.price) + '</button>' + '<small class="option-stock">' + Math.floor((product.quantity - (used.get(product.id) || 0)) / option.units) + ' available</small></div>').join('') + '</div></div>').join('') || '<p>No products found.</p>';
+  target.innerHTML = list(found.map(product => '<div class="row"><span><strong>' + escape(product.name) + '</strong><br><small>' + escape(stockLabel(product)) + '</small></span><button class="secondary" data-pick="' + product.id + '">Select</button></div>'), 'No products found.');
+}
+
+function showSellingOptions(product) {
+  const used = cartLines(state,cart).filter(line => line.id === product.id).reduce((sum,line) => sum + line.units,0);
+  document.querySelector('#title-pick').textContent = product.name;
+  document.querySelector('#selling-details').innerHTML = list(sellingOptions(product).map((option,index) => {
+    const available = Math.floor((product.quantity - used) / option.units);
+    return '<div class="row"><span><strong>' + escape(option.label) + '</strong><br><small>' + money(option.price) + ' · ' + available + ' available</small></span><button data-add="' + product.id + ':' + index + '" ' + (available < 1 ? 'disabled' : '') + '>Add to cart</button></div>';
+  }), 'No selling options.');
+  openPopup('pick');
 }
 
 function drawer() {
   const shift = active();
-  if (!shift) return panel('Open shift', form('open', amount('Opening cash'), 'Open shift'));
+  if (!shift) return panel('Drawer closed', launch('open','Open shift')) + popup('open','Open shift',form('open', amount('Opening cash'), 'Open shift'));
   return '<div class="cards">' + metric('Opening cash', money(shift.opening)) + metric('Opened by', escape(shift.operator)) + '</div>'
-    + '<div class="grid">' + panel('Cash in or out', form('move', '<label>Direction<select name="direction">' + options(['Cash in','Cash out']) + '</select></label>' + amount('Amount') + field('reason','Reason'), 'Record movement'))
-    + panel('Close shift', form('close', amount('Actual cash counted') + field('reason','Note (required if there is a difference)',false), 'Submit closing count')) + '</div>'
+    + '<div class="toolbar">' + launch('move','Cash in or out') + launch('close','Close shift') + '</div>' + popup('move','Cash in or out', form('move', '<label>Direction<select name="direction">' + options(['Cash in','Cash out']) + '</select></label>' + amount('Amount') + field('reason','Reason'), 'Record movement'))
+    + popup('close','Close shift', form('close', amount('Actual cash counted') + field('reason','Note (required if there is a difference)',false), 'Submit closing count'))
     + panel('Cash movements', list(shift.moves.map(move => row(escape(move.reason), money(move.amount))), 'No cash movements yet.'));
 }
 
@@ -167,9 +191,9 @@ const usernameField = () => '<label>Username<input name="username" autocomplete=
 
 function staffPage() {
   const sellers = staff().filter(account => account.role === 'seller');
-  return panel('Create seller account', form('new-seller', field('name','Full name') + usernameField() + passwordField('password','Initial password',10), 'Create seller'))
+  return '<div class="toolbar">' + launch('new-seller','Create seller') + (sellers.length ? launch('reset-seller','Reset password') : '') + '</div>' + popup('new-seller','Create seller account', form('new-seller', field('name','Full name') + usernameField() + passwordField('password','Initial password',10), 'Create seller'))
     + panel('Seller accounts', list(sellers.map(account => '<div class="row"><span><strong>' + escape(account.name) + '</strong><br><small>' + escape(account.username) + ' · ' + (account.disabled ? 'Disabled' : 'Active') + '</small></span><button class="secondary" data-toggle="' + account.id + '">' + (account.disabled ? 'Enable' : 'Disable') + '</button></div>'), 'No seller accounts yet.'))
-    + (sellers.length ? panel('Reset seller password', form('reset-seller', '<label>Seller<select name="id">' + sellers.map(account => '<option value="' + account.id + '">' + escape(account.username) + '</option>').join('') + '</select></label>' + passwordField('password','New password',10), 'Reset password')) : '');
+    + (sellers.length ? popup('reset-seller','Reset seller password', form('reset-seller', '<label>Seller<select name="id">' + sellers.map(account => '<option value="' + account.id + '">' + escape(account.username) + '</option>').join('') + '</select></label>' + passwordField('password','New password',10), 'Reset password')) : '');
 }
 
 function render() {
@@ -203,6 +227,33 @@ function previewMerge(merge) {
 document.addEventListener('click', event => {
   const button = event.target.closest('button');
   if (!button) return;
+  if (button.hasAttribute('data-dismiss')) {
+    button.closest('dialog').close();
+    return;
+  }
+  if (button.dataset.dialog) {
+    const id = button.dataset.dialog;
+    const editor = document.querySelector('#' + id);
+    if (button.dataset.product && editor) editor.elements.id.value = button.dataset.product;
+    if (id === 'pricing') fillPricing();
+    if (id === 'merge') previewMerge(editor);
+    openPopup(id);
+    return;
+  }
+  if (button.dataset.pick) {
+    const product = activeProducts().find(item => item.id === button.dataset.pick);
+    if (product) showSellingOptions(product);
+    return;
+  }
+  if (button.dataset.stockItem) {
+    const product = activeProducts().find(item => item.id === button.dataset.stockItem);
+    if (!product) return;
+    document.querySelector('#title-stock-item').textContent = product.name;
+    const actions = isAdmin() ? '<div class="toolbar"><button data-dialog="pricing" data-product="' + product.id + '">Edit selling options</button><button class="secondary" data-dialog="adjust" data-product="' + product.id + '">Record movement</button></div>' : '';
+    document.querySelector('#stock-details').innerHTML = '<p>' + escape(stockLabel(product)) + '</p>' + list(sellingOptions(product).map(option => row(escape(option.label),money(option.price))), '') + actions;
+    openPopup('stock-item');
+    return;
+  }
   if (button.hasAttribute('data-water-setup') && isAdmin()) {
     const entries = waterEntries();
     const merge = document.querySelector('#merge');
@@ -217,7 +268,7 @@ document.addEventListener('click', event => {
     fields.bulkPrice.value = entries.bag.price / 100;
     fields.pack.value = 20;
     previewMerge(merge);
-    merge.scrollIntoView({block:'nearest'});
+    openPopup('merge');
     fields.amount.focus();
     return;
   }
@@ -256,6 +307,7 @@ document.addEventListener('click', event => {
 
 document.addEventListener('input', event => {
   if (event.target.id === 'search') matches(event.target.value);
+  if (event.target.id === 'stock-search') document.querySelector('#stock-results').innerHTML = stockRows(event.target.value);
   if (event.target.form?.id === 'merge') previewMerge(event.target.form);
   const sale = document.querySelector('#sale');
   if (!sale || !sale.contains(event.target)) return;
@@ -319,9 +371,10 @@ document.addEventListener('submit', async event => {
           accounts.push({id:crypto.randomUUID(), name:required('name'), role:action === 'setup' ? 'admin' : 'seller', username, salt, hash});
         }
         localStorage.setItem(staffKey, JSON.stringify(accounts));
-        message(action === 'setup' ? 'Admin account created. Sign in to continue.' : 'Seller account saved.');
+
       }
       render();
+      if (action !== 'login') message(action === 'setup' ? 'Admin account created. Sign in to continue.' : 'Seller account saved.');
     } catch (error) {
       message(error.message);
       button.disabled = false;
@@ -429,8 +482,8 @@ document.addEventListener('submit', async event => {
     return;
   }
   if (['sale','close','adjust','pricing','merge'].includes(action)) cart.clear();
-  message(event.target.id === 'close' ? discrepancy(shift.closed.actual - shift.closed.expected) : 'Saved.');
   render();
+  message(event.target.id === 'close' ? discrepancy(shift.closed.actual - shift.closed.expected) : 'Saved.');
 });
 window.addEventListener('storage', event => {
   if (event.key === staffKey) {
