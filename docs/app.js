@@ -48,7 +48,10 @@ const metric = (label, value) => '<div class="metric"><span class="muted">' + la
 const active = () => state.shifts.find(shift => !shift.closed);
 const total = sales => sales.reduce((sum, sale) => sum + sale.total, 0);
 const discrepancy = value => value === 0 ? 'Balanced' : money(Math.abs(value)) + (value < 0 ? ' shortage' : ' surplus');
-let page = 'Home';
+let page = 'Sell';
+let category = '';
+let sellQuery = '';
+let lastSale = null;
 let reportDay = day.format(new Date());
 let timer;
 
@@ -136,24 +139,48 @@ function stock() {
     + popup('adjust','Record stock movement',adjust) + setup + merge;
 }
 
-function sell() {
-  if (!active()) return panel('Open the drawer to start selling', '<button data-page="Cash Drawer">Open Shift</button>');
-  const lines = cartLines(state, cart);
-  const due = lines.reduce((sum,line) => sum + line.price * line.quantity, 0);
-  const waterNotice = waterEntries() ? panel('Pure Water stock setup', '<p>Pure Water has two product entries. Combine them in Stock so the sachets inside the bags can be sold from the same balance.</p>' + (isAdmin() ? '<button data-page="Stock">Go to Stock</button>' : '')) : '';
-  return waterNotice + '<div class="grid">' + panel('Find a product', '<label>Search by name, barcode or category<input id="search" type="search" autocomplete="off"></label><div id="matches" class="list"></div>')
-    + panel('Cart', list(lines.map(line => '<div class="row"><strong>' + escape(line.name + ' · ' + line.label) + '</strong><span>' + line.quantity + ' × ' + money(line.price) + '</span><button class="secondary" data-remove="' + line.key + '">Remove one</button></div>'), 'Add products to start a sale.')
-    + '<p><strong>Total ' + money(due) + '</strong></p>' + (lines.length ? launch('payment','Take payment') : '')) + '</div>'
-    + popup('pick','Selling options','<div id="selling-details"></div>')
-    + (lines.length ? popup('payment','Take payment · ' + money(due), form('sale', '<label>Payment method<select name="method">' + options(methods) + '</select></label><label id="tender">Cash received (₦)<input name="tender" type="number" min="0" step="0.01" required></label><output id="change"></output><label id="reference" hidden>Terminal or transfer reference<input name="reference" maxlength="150" placeholder="Optional"></label><label id="payment-confirm" class="checkbox" hidden><input type="checkbox" name="confirmed">I checked that payment was received</label>', 'Complete sale')) : '');
+const departments = ['All products', ...categories];
+function availableUnits(productId, lines) {
+  const product = activeProducts().find(item => item.id === productId);
+  return product.quantity - lines.filter(line => line.id === productId).reduce((sum,line) => sum + line.units,0);
 }
 
-function matches(query = '') {
+function sell() {
+  const shift = active();
+  const lines = cartLines(state, cart);
+  const due = lines.reduce((sum,line) => sum + line.price * line.quantity,0);
+  const count = lines.reduce((sum,line) => sum + line.quantity,0);
+  const waterNotice = waterEntries() ? '<div class="banner">Pure Water has two entries. An admin can combine them in Inventory. ' + (isAdmin() ? '<button class="secondary" data-page="Stock">Inventory</button>' : '') + '</div>' : '';
+  const register = shift ? '<span class="register-state"><i></i> Register open</span>' : '<span class="register-state closed"><i></i> Register closed</span>' + launch('open','Open register');
+  const departmentsBar = departments.map((name,index) => '<button data-category="' + index + '" aria-pressed="' + (category === (index ? name : '')) + '">' + escape(name) + '</button>').join('');
+  const order = lines.map(line => {
+    const increment = availableUnits(line.id,lines) >= line.units / line.quantity;
+    return '<div class="order-line"><strong>' + escape(line.name) + '</strong><small>' + escape(line.label) + ' · ' + money(line.price) + '</small><div class="row"><div class="stepper"><button aria-label="Remove one ' + escape(line.name + ' ' + line.label) + '" data-remove="' + line.key + '">−</button><span>' + line.quantity + '</span><button aria-label="Add one ' + escape(line.name + ' ' + line.label) + '" data-add="' + line.key + '"' + (increment ? '' : ' disabled') + '>+</button></div><strong>' + money(line.price * line.quantity) + '</strong></div></div>';
+  }).join('');
+  const payment = '<fieldset class="payment-methods"><legend>Payment method</legend>' + methods.map((method,index) => '<label><input type="radio" name="method" value="' + method + '"' + (index ? '' : ' checked') + '><span>' + method + '</span></label>').join('') + '</fieldset><label id="tender">Cash received (₦)<input name="tender" type="number" min="0" step="0.01" inputmode="decimal" required></label><output id="change"></output><label id="reference" hidden>Terminal or transfer reference<input name="reference" maxlength="150" placeholder="Optional"></label><label id="payment-confirm" class="checkbox" hidden><input type="checkbox" name="confirmed">I checked that payment was received</label>';
+  const receipt = lastSale ? popup('receipt','Sale receipt', '<p>' + escape(lastSale.method) + ' · ' + time(lastSale.at) + '</p>' + list(lastSale.lines.map(line => row(escape(line.quantity + ' × ' + line.name + ' · ' + line.label),money(line.price * line.quantity))), '') + row('Total paid',money(lastSale.total))) : '';
+  return '<div class="register-bar">' + register + '</div>' + waterNotice + '<div class="pos-layout"><section class="catalogue-pane" aria-label="Products"><label class="search-label">Find a product<input id="search" type="search" autocomplete="off" placeholder="Search name or barcode" value="' + escape(sellQuery) + '"></label><div class="departments" aria-label="Product categories">' + departmentsBar + '</div><div id="matches" class="product-grid"></div></section>'
+    + '<section class="order-pane" aria-label="Current order"><header class="row"><h2>Current order</h2><span class="pill">' + count + (count === 1 ? ' item' : ' items') + '</span></header><div class="order-items">' + (order || '<div class="empty-order"><strong>Your order is empty</strong><p>Select a product to begin.</p></div>') + '</div><footer>' + row('Total due',money(due)) + (lines.length ? launch('payment','Take payment') : '<button disabled>Take payment</button>') + (lastSale ? '<button class="secondary" data-dialog="receipt">Last sale receipt</button>' : '') + '</footer></section></div>'
+    + popup('open','Open register',form('open',amount('Opening cash'),'Open register'))
+    + popup('pick','Selling options','<div id="selling-details"></div>')
+    + (lines.length ? popup('payment','Take payment · ' + money(due),form('sale',payment,'Complete sale')) : '')
+    + receipt;
+}
+
+function matches(query = sellQuery) {
   const target = document.querySelector('#matches');
   if (!target) return;
   const search = query.trim().toLowerCase();
-  const found = activeProducts().filter(product => product.name.toLowerCase().includes(search) || product.barcode.includes(search) || (product.barcodes || []).some(code => code.includes(search)) || (product.category || '').toLowerCase().includes(search));
-  target.innerHTML = list(found.map(product => '<div class="row"><span><strong>' + escape(product.name) + '</strong><br><small>' + escape(stockLabel(product)) + '</small></span><button class="secondary" data-pick="' + product.id + '">Select</button></div>'), 'No products found.');
+  const lines = cartLines(state,cart);
+  const found = activeProducts().filter(product => (!category || product.category === category)
+    && [product.name,product.barcode,product.category,...(product.barcodes || [])].some(value => value?.toLowerCase().includes(search)));
+  target.innerHTML = found.map(product => {
+    const options = sellingOptions(product);
+    const unavailable = availableUnits(product.id,lines) < Math.min(...options.map(option => option.units));
+    const index = Math.max(0,categories.indexOf(product.category) + 1);
+    const action = options.length === 1 ? 'data-add="' + product.id + ':0"' : 'data-pick="' + product.id + '"';
+    return '<button class="product-card" ' + action + (!active() || unavailable ? ' disabled' : '') + '><span class="product-mark tone-' + index + '">' + escape(product.category || 'Other') + '</span><span class="product-name">' + escape(product.name) + '</span><small>' + escape(stockLabel(product)) + '</small><span class="product-price">' + (options.length > 1 ? 'From ' : '') + money(Math.min(...options.map(option => option.price))) + '</span></button>';
+  }).join('') || '<p class="muted">No matching products.</p>';
 }
 
 function showSellingOptions(product) {
@@ -197,6 +224,7 @@ function staffPage() {
 }
 
 function render() {
+  app.dataset.view = user ? (page === 'Sell' ? 'pos' : 'management') : 'login';
   if (!user) {
     nav.innerHTML = '';
     const setup = staff().length === 0;
@@ -206,10 +234,11 @@ function render() {
         + passwordField('password',setup ? 'Choose a password' : 'Password',setup ? 10 : 1), setup ? 'Create admin account' : 'Sign in'));
     return;
   }
-  const allowed = isAdmin() ? [...pages, 'Staff'] : pages.filter(name => name !== 'Reports');
+  const allowed = isAdmin() ? ['Sell', ...pages.filter(name => name !== 'Sell'), 'Staff'] : ['Sell','Home','Stock','Cash Drawer'];
   if (!allowed.includes(page)) page = 'Home';
-  nav.innerHTML = allowed.map(name => '<button data-page="' + name + '"' + (page === name ? ' aria-current="page"' : '') + '>' + name + '</button>').join('') + '<button data-signout>Sign out</button>';
-  app.innerHTML = '<div class="eyebrow">' + escape(user.name) + ' · ' + (isAdmin() ? 'Admin' : 'Seller') + ' · ' + time(Date.now()).split(' at ')[0] + '</div><h1>' + (page === 'Home' ? 'Store overview' : page) + '</h1>'
+  const navLabels = {Sell:'Checkout',Home:'Overview',Stock:'Inventory','Cash Drawer':'Register',Reports:'Reports',Staff:'Staff'};
+  nav.innerHTML = allowed.map(name => '<button data-page="' + name + '"' + (page === name ? ' aria-current="page"' : '') + '>' + navLabels[name] + '</button>').join('') + '<button data-signout>Sign out</button>';
+  app.innerHTML = '<div class="eyebrow">' + escape(user.name) + ' · ' + (isAdmin() ? 'Admin' : 'Seller') + ' · ' + time(Date.now()).split(' at ')[0] + '</div><h1>' + navLabels[page] + '</h1>'
     + ({Home:home, Sell:sell, Stock:stock, 'Cash Drawer':drawer, Reports:reports, Staff:staffPage}[page])();
   matches();
   fillPricing();
@@ -227,6 +256,12 @@ function previewMerge(merge) {
 document.addEventListener('click', event => {
   const button = event.target.closest('button');
   if (!button) return;
+  if (button.dataset.category !== undefined) {
+    category = Number(button.dataset.category) ? departments[Number(button.dataset.category)] : '';
+    for (const tab of document.querySelectorAll('[data-category]')) tab.setAttribute('aria-pressed', String(tab === button));
+    matches();
+    return;
+  }
   if (button.hasAttribute('data-dismiss')) {
     button.closest('dialog').close();
     return;
@@ -280,7 +315,10 @@ document.addEventListener('click', event => {
   if (button.hasAttribute('data-signout')) {
     user = null;
     cart.clear();
-    page = 'Home';
+    page = 'Sell';
+    sellQuery = '';
+    category = '';
+    lastSale = null;
     render();
     return;
   }
@@ -296,17 +334,21 @@ document.addEventListener('click', event => {
   }
   const id = button.dataset.add || button.dataset.remove;
   if (!id) return;
-  const query = document.querySelector('#search').value;
+  const scroll = document.querySelector('#matches')?.scrollTop ?? 0;
   const quantity = (cart.get(id) || 0) + (button.dataset.add ? 1 : -1);
   if (quantity > 0) cart.set(id, quantity);
   else cart.delete(id);
   render();
-  document.querySelector('#search').value = query;
-  matches(query);
+  const productsGrid = document.querySelector('#matches');
+  if (productsGrid) productsGrid.scrollTop = scroll;
+
 });
 
 document.addEventListener('input', event => {
-  if (event.target.id === 'search') matches(event.target.value);
+  if (event.target.id === 'search') {
+    sellQuery = event.target.value;
+    matches();
+  }
   if (event.target.id === 'stock-search') document.querySelector('#stock-results').innerHTML = stockRows(event.target.value);
   if (event.target.form?.id === 'merge') previewMerge(event.target.form);
   const sale = document.querySelector('#sale');
@@ -481,6 +523,7 @@ document.addEventListener('submit', async event => {
     message(error.message);
     return;
   }
+  if (action === 'sale') lastSale = state.sales.at(-1);
   if (['sale','close','adjust','pricing','merge'].includes(action)) cart.clear();
   render();
   message(event.target.id === 'close' ? discrepancy(shift.closed.actual - shift.closed.expected) : 'Saved.');
@@ -489,6 +532,7 @@ window.addEventListener('storage', event => {
   if (event.key === staffKey) {
     user = null;
     cart.clear();
+    lastSale = null;
     render();
     return;
   }
