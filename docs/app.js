@@ -1,4 +1,4 @@
-import { initial, expected, checkout } from './store.mjs';
+import { initial, expected, checkout, sellingOptions, cartLines } from './store.mjs';
 
 const key = 'rehoboth-v1';
 let state = JSON.parse(localStorage.getItem(key) || 'null') ?? initial();
@@ -28,7 +28,8 @@ const currency = new Intl.NumberFormat('en-NG', { style: 'currency', currency: '
 const money = value => currency.format(value / 100);
 const escape = value => String(value).replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
 const options = values => values.map(value => '<option>' + escape(value) + '</option>').join('');
-const products = () => state.products.map(product => '<option value="' + product.id + '">' + escape(product.name) + '</option>').join('');
+const activeProducts = () => state.products.filter(product => !product.archived);
+const products = () => activeProducts().map(product => '<option value="' + product.id + '">' + escape(product.name) + '</option>').join('');
 const time = value => clock.format(new Date(value));
 const amount = label => '<label>' + label + ' (₦)<input name="amount" type="number" min="0" max="1000000000" step="0.01" required></label>';
 const counter = (name, label, min = 0) => '<label>' + label + '<input name="' + name + '" type="number" min="' + min + '" max="10000000" step="1" required></label>';
@@ -53,27 +54,62 @@ function message(value) {
 
 function home() {
   const today = state.sales.filter(sale => day.format(new Date(sale.at)) === day.format(new Date()));
-  const low = state.products.filter(product => product.quantity <= product.low);
+  const low = activeProducts().filter(product => product.quantity <= product.low);
   return '<div class="cards">' + metric('Sales today', money(total(today))) + metric('Transactions', today.length) + metric('Low-stock products', low.length) + '</div>'
     + panel('Trading shift', '<div class="row"><span class="pill">' + (active() ? 'Shift open' : 'Drawer closed') + '</span><button data-page="' + (active() ? 'Sell">New Sale' : 'Cash Drawer">Open Shift') + '</button></div>')
     + panel('Low stock', list(low.map(product => row(escape(product.name), product.quantity + ' left')), 'No products are below their stock threshold.'))
     + panel('Today by payment method', list(methods.map(method => row(method, money(total(today.filter(sale => sale.method === method))))), ''));
 }
 
+const stockLabel = product => {
+  const total = product.quantity + ' ' + unitName(product) + (product.quantity === 1 ? '' : 's');
+  if (!product.bulkLabel || product.pack < 2) return total;
+  const count = Math.floor(product.quantity / product.pack);
+  const remainder = product.quantity % product.pack;
+  return count + ' ' + product.bulkLabel.toLowerCase() + (count === 1 ? '' : 's')
+    + (remainder ? ' + ' + remainder + ' ' + unitName(product) + (remainder === 1 ? '' : 's') : '') + ' · ' + total + ' total';
+};
+const selectProduct = (name, label) => '<label>' + label + '<select name="' + name + '">' + products() + '</select></label>';
+const unitField = '<label>Base stock unit<select name="unit">' + options(units) + '</select></label>';
+const bulkFields = field('bulkLabel','Bulk name (e.g. Bag or Carton)',false)
+  + '<label>Bulk price (₦)<input name="bulkPrice" type="number" min="0" max="1000000000" step="0.01"></label>'
+  + counter('pack','Units per bulk package',1).replace('required','required value="1"');
+const groupFields = '<label>Units per retail sale<input name="group" type="number" min="1" max="10000000" value="1" required></label>'
+  + amount('Price per retail sale');
+const movementKinds = ['Receive units','Receive bulk packages','Stock count','Damage','Expiry'];
+
+function fillPricing() {
+  const editor = document.querySelector('#pricing');
+  if (!editor) return;
+  const product = activeProducts().find(item => item.id === editor.elements.id.value);
+  const retail = sellingOptions(product)[0];
+  editor.elements.unit.value = units.includes(product.unit) ? product.unit : 'Piece';
+  editor.elements.group.value = retail.units;
+  editor.elements.amount.value = retail.price / 100;
+  editor.elements.pack.value = product.pack || 1;
+  editor.elements.bulkLabel.value = product.bulkLabel || '';
+  editor.elements.bulkPrice.value = product.bulkLabel ? sellingOptions(product)[1].price / 100 : '';
+}
+
 function stock() {
-  const inventory = panel('Stock on hand', list(state.products.map(product => row(escape(product.name) + ' · ' + money(product.price) + '<br><small>' + escape(product.category || 'Other') + ' · per ' + escape(unitName(product)) + '</small>', product.quantity + ' in stock')), 'No products have been added.'));
+  const inventory = panel('Stock on hand', list(activeProducts().map(product => row(
+    escape(product.name) + '<br><small>' + sellingOptions(product).map(option => escape(option.label) + ' ' + money(option.price)).join(' · ') + '</small>',
+    escape(stockLabel(product)))), 'No products have been added.'));
   if (!isAdmin()) return inventory;
-  const adjust = state.products.length ? form('adjust', '<label>Product<select name="id">' + products() + '</select></label><label>Movement<select name="kind">' + options(['Receive units', 'Receive cartons or cases', 'Stock count', 'Damage', 'Expiry']) + '</select></label>' + counter('quantity', 'Quantity') + field('reason', 'Reason or delivery reference'), 'Save movement') : '<p>Add a product to record a movement.</p>';
-  return inventory
-    + '<div class="grid">' + panel('Add product', form('product', field('name','Product name') + field('barcode','Barcode',false) + '<label>Category<select name="category">' + options(categories) + '</select></label><label>Selling unit<select name="unit">' + options(units) + '</select></label>' + amount('Selling price') + counter('quantity','Opening units') + counter('pack','Selling units per carton or case',1) + counter('low','Low-stock threshold'), 'Add product')) + panel('Record stock movement', adjust) + '</div>';
+  const adjust = activeProducts().length ? form('adjust', selectProduct('id','Product') + '<label>Movement<select name="kind">' + options(movementKinds) + '</select></label>' + counter('quantity','Quantity') + field('reason','Reason or delivery reference'), 'Save movement') : '<p>Add a product to record a movement.</p>';
+  const setup = activeProducts().length ? panel('Set selling options', form('pricing', selectProduct('id','Product') + unitField + groupFields + bulkFields, 'Save selling options')) : '';
+  const merge = activeProducts().length > 1 ? panel('Combine existing products', form('merge', selectProduct('id','Keep this product (base units)') + selectProduct('source','Convert this product (bags or cartons)') + unitField + groupFields + bulkFields + '<output id="conversion"></output>', 'Combine products')) : '';
+  return inventory + '<div class="grid">'
+    + panel('Add product',form('product',field('name','Product name') + field('barcode','Barcode',false) + '<label>Category<select name="category">' + options(categories) + '</select></label>' + unitField + groupFields + bulkFields + counter('quantity','Opening base units') + counter('low','Low-stock threshold in base units'), 'Add product'))
+    + panel('Record stock movement',adjust) + setup + merge + '</div>';
 }
 
 function sell() {
   if (!active()) return panel('Open the drawer to start selling', '<button data-page="Cash Drawer">Open Shift</button>');
-  const lines = state.products.filter(product => cart.has(product.id));
-  const due = lines.reduce((sum, product) => sum + product.price * cart.get(product.id), 0);
+  const lines = cartLines(state, cart);
+  const due = lines.reduce((sum,line) => sum + line.price * line.quantity, 0);
   return '<div class="grid">' + panel('Find a product', '<label>Search by name, barcode or category<input id="search" type="search" autocomplete="off"></label><div id="matches" class="list"></div>')
-    + panel('Cart', list(lines.map(product => '<div class="row"><strong>' + escape(product.name) + '</strong><span>' + cart.get(product.id) + ' × ' + money(product.price) + '</span><button class="secondary" data-remove="' + product.id + '">Remove one</button></div>'), 'Add products to start a sale.')
+    + panel('Cart', list(lines.map(line => '<div class="row"><strong>' + escape(line.name + ' · ' + line.label) + '</strong><span>' + line.quantity + ' × ' + money(line.price) + '</span><button class="secondary" data-remove="' + line.key + '">Remove one</button></div>'), 'Add products to start a sale.')
     + '<p><strong>Total ' + money(due) + '</strong></p>' + (lines.length ? form('sale', '<label>Payment method<select name="method">' + options(methods) + '</select></label><label id="tender">Cash received (₦)<input name="tender" type="number" min="0" step="0.01" required></label><output id="change"></output><label id="reference" hidden>Terminal or transfer reference<input name="reference" maxlength="150" placeholder="Optional"></label><label id="payment-confirm" class="checkbox" hidden><input type="checkbox" name="confirmed">I checked that payment was received</label>', 'Complete sale') : '')) + '</div>';
 }
 
@@ -81,8 +117,11 @@ function matches(query = '') {
   const target = document.querySelector('#matches');
   if (!target) return;
   const search = query.trim().toLowerCase();
-  const found = state.products.filter(product => product.name.toLowerCase().includes(search) || product.barcode.includes(search) || (product.category || '').toLowerCase().includes(search));
-  target.innerHTML = found.map(product => '<div class="row"><span><strong>' + escape(product.name) + '</strong><br>' + money(product.price) + ' · ' + product.quantity + ' left</span><button data-add="' + product.id + '" ' + (product.quantity <= (cart.get(product.id) || 0) ? 'disabled' : '') + '>Add</button></div>').join('') || '<p>No products found.</p>';
+  const found = activeProducts().filter(product => product.name.toLowerCase().includes(search) || product.barcode.includes(search) || (product.barcodes || []).some(code => code.includes(search)) || (product.category || '').toLowerCase().includes(search));
+  const used = new Map();
+  for (const line of cartLines(state,cart)) used.set(line.id,(used.get(line.id) || 0) + line.units);
+  target.innerHTML = found.map(product => '<div><strong>' + escape(product.name) + '</strong><p class="muted">' + escape(stockLabel(product)) + '</p><div class="sell-options">'
+    + sellingOptions(product).map((option,index) => '<button data-add="' + product.id + ':' + index + '" ' + (product.quantity - (used.get(product.id) || 0) < option.units ? 'disabled' : '') + '>' + escape(option.label) + ' · ' + money(option.price) + '</button>').join('') + '</div></div>').join('') || '<p>No products found.</p>';
 }
 
 function drawer() {
@@ -100,7 +139,7 @@ function reports() {
   const shifts = state.shifts.filter(shift => shift.closed && onDay(shift.closed.at));
   return panel('Reporting date', '<label>Date<input id="report-day" type="date" value="' + reportDay + '"></label>')
     + '<div class="cards">' + metric('Total sales', money(total(sales))) + methods.map(method => metric(method, money(total(sales.filter(sale => sale.method === method))))).join('') + '</div>'
-    + panel('Sales', list(sales.map(sale => row(escape(sale.lines.map(line => line.quantity + ' × ' + line.name).join(', ')) + '<br><small>' + time(sale.at) + ' · ' + (sale.operator ? escape(sale.operator) + ' · ' : '') + sale.method + (sale.reference ? ' · Ref ' + escape(sale.reference) : '') + '</small>', money(sale.total))), 'No sales for this date.'))
+    + panel('Sales', list(sales.map(sale => row(escape(sale.lines.map(line => line.quantity + ' × ' + line.name + (line.label ? ' (' + line.label + ')' : '')).join(', ')) + '<br><small>' + time(sale.at) + ' · ' + (sale.operator ? escape(sale.operator) + ' · ' : '') + sale.method + (sale.reference ? ' · Ref ' + escape(sale.reference) : '') + '</small>', money(sale.total))), 'No sales for this date.'))
     + panel('Closed shifts', list(shifts.map(shift => row(escape(shift.operator) + ' · ' + time(shift.closed.at) + '<br><small>Expected ' + money(shift.closed.expected) + ' · Counted ' + money(shift.closed.actual) + ' · ' + escape(shift.closed.reason) + '</small>', discrepancy(shift.closed.actual - shift.closed.expected))), 'No closed shifts for this date.'))
     + panel('Stock movements', list(state.stock.filter(move => onDay(move.at)).map(move => row(escape(move.name) + ' · ' + escape(move.reason), (move.quantity > 0 ? '+' : '') + move.quantity)), 'No stock movements for this date.'));
 }
@@ -131,6 +170,7 @@ function render() {
   app.innerHTML = '<div class="eyebrow">' + escape(user.name) + ' · ' + (isAdmin() ? 'Admin' : 'Seller') + ' · ' + time(Date.now()).split(' at ')[0] + '</div><h1>' + (page === 'Home' ? 'Store overview' : page) + '</h1>'
     + ({Home:home, Sell:sell, Stock:stock, 'Cash Drawer':drawer, Reports:reports, Staff:staffPage}[page])();
   matches();
+  fillPricing();
 }
 
 document.addEventListener('click', event => {
@@ -171,6 +211,15 @@ document.addEventListener('click', event => {
 
 document.addEventListener('input', event => {
   if (event.target.id === 'search') matches(event.target.value);
+  const merge = document.querySelector('#merge');
+  if (merge?.contains(event.target)) {
+    const target = activeProducts().find(product => product.id === merge.elements.id.value);
+    const source = activeProducts().find(product => product.id === merge.elements.source.value);
+    const pack = Number(merge.elements.pack.value);
+    document.querySelector('#conversion').textContent = target && source && target !== source && pack > 1
+      ? target.quantity + ' + ' + source.quantity + ' × ' + pack + ' = ' + (target.quantity + source.quantity * pack) + ' base units after combining.'
+      : 'Choose two different entries and enter the units per bag or carton.';
+  }
   const sale = document.querySelector('#sale');
   if (!sale || !sale.contains(event.target)) return;
   const cash = sale.elements.method.value === 'Cash';
@@ -179,11 +228,12 @@ document.addEventListener('input', event => {
   document.querySelector('#reference').hidden = cash;
   document.querySelector('#payment-confirm').hidden = cash;
   sale.elements.confirmed.required = !cash;
-  const due = [...cart].reduce((sum, [id, quantity]) => sum + state.products.find(product => product.id === id).price * quantity, 0);
+  const due = cartLines(state, cart).reduce((sum,line) => sum + line.price * line.quantity, 0);
   const tender = Math.round(Number(sale.elements.tender.value) * 100);
   document.querySelector('#change').textContent = cash && sale.elements.tender.value && tender >= due ? 'Change ' + money(tender - due) : '';
 });
 document.addEventListener('change', event => {
+  if (event.target.form?.id === 'pricing' && event.target.name === 'id') fillPricing();
   if (event.target.id === 'report-day' && event.target.value) {
     reportDay = event.target.value;
     render();
@@ -249,15 +299,48 @@ document.addEventListener('submit', async event => {
   const at = Date.now();
   const shift = active();
   const record = (product, quantity, reason) => state.stock.push({ at, name: product.name, quantity, reason });
+  const configure = product => {
+    const group = Number(value('group'));
+    const pack = Number(value('pack'));
+    const unit = value('unit');
+    const bulkLabel = value('bulkLabel');
+    if (!units.includes(unit) || !Number.isSafeInteger(group) || group < 1 || !Number.isSafeInteger(pack) || pack < 1) throw Error('Check the selling units.');
+    if (bulkLabel && (pack < 2 || !value('bulkPrice'))) throw Error('Enter at least two units per bulk package and its price.');
+    if (!bulkLabel && value('bulkPrice')) throw Error('Enter a name for the bulk option.');
+    const retail = { label: group === 1 ? unit : group + ' ' + unit.toLowerCase() + 's', units: group, price: cents('amount') };
+    Object.assign(product,{unit,pack,bulkLabel,price:retail.price,sellingOptions:[retail]});
+    if (bulkLabel) product.sellingOptions.push({label:bulkLabel,units:pack,price:cents('bulkPrice')});
+  };
   try {
     switch (event.target.id) {
       case 'product': {
         if (!isAdmin()) throw Error('Admin access is required to add products.');
         const barcode = value('barcode');
-        if (barcode && state.products.some(product => product.barcode === barcode)) throw Error('That barcode is already assigned.');
+        if (barcode && state.products.some(product => (product.barcode === barcode || product.barcodes?.includes(barcode)))) throw Error('That barcode is already assigned.');
         const product = { id: crypto.randomUUID(), name: required('name'), barcode, category: value('category'), unit: value('unit'), price: cents('amount'), quantity: Number(value('quantity')), pack: Number(value('pack')), low: Number(value('low')) };
+        configure(product);
         state.products.push(product);
         record(product, product.quantity, 'Opening stock');
+        break;
+      }
+      case 'pricing':
+      case 'merge': {
+        if (!isAdmin()) throw Error('Admin access is required to change products.');
+        const product = activeProducts().find(item => item.id === value('id'));
+        if (!product) throw Error('Choose a product.');
+        configure(product);
+        if (action === 'merge') {
+          const source = activeProducts().find(item => item.id === value('source'));
+          if (!source || source === product || !product.bulkLabel) throw Error('Choose two different products and configure the bulk option.');
+          const added = source.quantity * product.pack;
+          if (!Number.isSafeInteger(product.quantity + added)) throw Error('The converted stock count is too large.');
+          product.quantity += added;
+          product.barcodes = [...new Set([...(product.barcodes || []),source.barcode,...(source.barcodes || [])].filter(Boolean))];
+          record(product, added, 'Converted ' + source.quantity + ' × ' + source.name + ' at ' + product.pack + ' base units each');
+          record(source, -source.quantity, 'Combined into ' + product.name);
+          source.quantity = 0;
+          source.archived = true;
+        }
         break;
       }
       case 'adjust': {
@@ -265,10 +348,10 @@ document.addEventListener('submit', async event => {
         const product = state.products.find(item => item.id === value('id'));
         const quantity = Number(value('quantity'));
         const kind = value('kind');
-        const delta = {'Receive units': quantity, 'Receive cartons or cases': quantity * product.pack, 'Stock count': quantity - product.quantity, Damage: -quantity, Expiry: -quantity}[kind];
+        const delta = {'Receive units': quantity, 'Receive bulk packages': quantity * product.pack, 'Stock count': quantity - product.quantity, Damage: -quantity, Expiry: -quantity}[kind];
         if (product.quantity + delta < 0) throw Error('Movement would leave negative stock.');
         product.quantity += delta;
-        record(product, delta, kind + ' · ' + required('reason'));
+        record(product, delta, kind + (kind === 'Receive bulk packages' ? ' · ' + quantity + ' × ' + (product.bulkLabel || 'package') + ' (' + product.pack + ' base units each)' : '') + ' · ' + required('reason'));
         break;
       }
       case 'open':
@@ -308,7 +391,7 @@ document.addEventListener('submit', async event => {
     message(error.message);
     return;
   }
-  if (event.target.id === 'sale' || event.target.id === 'close') cart.clear();
+  if (['sale','close','adjust','pricing','merge'].includes(action)) cart.clear();
   message(event.target.id === 'close' ? discrepancy(shift.closed.actual - shift.closed.expected) : 'Saved.');
   render();
 });
