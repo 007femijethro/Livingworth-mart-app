@@ -1,7 +1,13 @@
+import { addStarterCatalogue } from './catalogue.mjs';
 import { initial, expected, checkout, sellingOptions, cartLines } from './store.mjs';
 
 const key = 'rehoboth-v1';
 let state = JSON.parse(localStorage.getItem(key) || 'null') ?? initial();
+const starter = addStarterCatalogue(state);
+if (starter !== state) {
+  localStorage.setItem(key, JSON.stringify(starter));
+  state = starter;
+}
 const cart = new Map();
 const adminKey = 'livingworth-admin-v1';
 const staffKey = 'livingworth-staff-v1';
@@ -99,16 +105,18 @@ function fillPricing() {
 
 function stock() {
   const inventory = panel('Stock on hand', list(activeProducts().map(product => row(
-    escape(product.name) + '<br><small>' + sellingOptions(product).map(option => escape(option.label) + ' ' + money(option.price)).join(' · ') + '</small>',
+    escape(product.name) + (product.sample ? ' <small class="muted">Starter item</small>' : '') + '<br><small>' + sellingOptions(product).map(option => escape(option.label) + ' ' + money(option.price)).join(' · ') + '</small>',
     escape(stockLabel(product)))), 'No products have been added.'));
   const waterSetup = waterEntries();
   const waterNotice = waterSetup ? panel('Combine Pure Water stock', '<p>The two Pure Water entries need one shared balance. Combine them to make the sachets inside each bag available at checkout.</p>'
     + (isAdmin() ? '<button type="button" data-water-setup>Set up Pure Water</button>' : '<p>Ask an admin to combine the entries.</p>')) : '';
   if (!isAdmin()) return waterNotice + inventory;
+  const starterNote = activeProducts().some(product => product.sample)
+    ? panel('Starter catalogue', '<p>Starter items have example prices and opening counts. Set the actual prices under Set selling options and enter actual quantities using Stock count.</p>') : '';
   const adjust = activeProducts().length ? form('adjust', selectProduct('id','Product') + '<label>Movement<select name="kind">' + options(movementKinds) + '</select></label>' + counter('quantity','Quantity') + field('reason','Reason or delivery reference'), 'Save movement') : '<p>Add a product to record a movement.</p>';
   const setup = activeProducts().length ? panel('Set selling options', form('pricing', selectProduct('id','Product') + unitField + groupFields + bulkFields, 'Save selling options')) : '';
   const merge = activeProducts().length > 1 ? panel('Combine existing products', form('merge', selectProduct('id','Keep this product (base units)') + selectProduct('source','Convert this product (bags or cartons)') + unitField + groupFields + bulkFields + '<output id="conversion"></output>', 'Combine products')) : '';
-  return waterNotice + inventory + '<div class="grid">'
+  return waterNotice + starterNote + inventory + '<div class="grid">'
     + panel('Add product',form('product',field('name','Product name') + field('barcode','Barcode',false) + '<label>Category<select name="category">' + options(categories) + '</select></label>' + unitField + groupFields + bulkFields + counter('quantity','Opening base units') + counter('low','Low-stock threshold in base units'), 'Add product'))
     + panel('Record stock movement',adjust) + setup + merge + '</div>';
 }
