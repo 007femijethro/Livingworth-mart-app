@@ -3,6 +3,18 @@ import { initial, expected, checkout } from './store.mjs';
 const key = 'rehoboth-v1';
 let state = JSON.parse(localStorage.getItem(key) || 'null') ?? initial();
 const cart = new Map();
+const adminKey = 'livingworth-admin-v1';
+let admin = false;
+const categories = ['Food staples', 'Drinks and water', 'Snacks and biscuits', 'Toiletries', 'Household and cleaning', 'Baby products', 'Other'];
+const units = ['Piece', 'Bottle', 'Sachet', 'Tin', 'Pack', 'Bag', 'Paint bucket'];
+const unitName = product => (product.unit || 'Unit').toLowerCase();
+const adminForm = () => form('admin', '<label>Admin PIN<input name="pin" type="password" inputmode="numeric" pattern="[0-9]{6,12}" required></label>', localStorage.getItem(adminKey) ? 'Unlock stock controls' : 'Set admin PIN');
+async function pinHash(pin, salt) {
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey('raw', encoder.encode(pin), 'PBKDF2', false, ['deriveBits']);
+  const bits = await crypto.subtle.deriveBits({name:'PBKDF2', salt:encoder.encode(salt), iterations:600000, hash:'SHA-256'}, key, 256);
+  return Array.from(new Uint8Array(bits), byte => byte.toString(16).padStart(2,'0')).join('');
+}
 const app = document.querySelector('#app');
 const nav = document.querySelector('nav');
 const notice = document.querySelector('#notice');
@@ -47,25 +59,27 @@ function home() {
 }
 
 function stock() {
-  const adjust = state.products.length ? form('adjust', '<label>Product<select name="id">' + products() + '</select></label><label>Movement<select name="kind">' + options(['Receive units', 'Receive cartons', 'Stock count', 'Damage', 'Expiry']) + '</select></label>' + counter('quantity', 'Quantity') + field('reason', 'Reason or delivery reference'), 'Save movement') : '<p>Add a product to record a movement.</p>';
-  return panel('Stock on hand', list(state.products.map(product => row(escape(product.name) + ' · ' + money(product.price), product.quantity + ' units')), 'Add your first product below.'))
-    + '<div class="grid">' + panel('Add product', form('product', field('name','Product name') + field('barcode','Barcode',false) + amount('Selling price') + counter('quantity','Opening units') + counter('pack','Units per carton',1) + counter('low','Low-stock threshold'), 'Add product')) + panel('Record stock movement', adjust) + '</div>';
+  const inventory = panel('Stock on hand', list(state.products.map(product => row(escape(product.name) + ' · ' + money(product.price) + '<br><small>' + escape(product.category || 'Other') + ' · per ' + escape(unitName(product)) + '</small>', product.quantity + ' in stock')), 'No products have been added.'));
+  if (!admin) return inventory + panel('Admin access', '<p class="muted">' + (localStorage.getItem(adminKey) ? 'Stock changes require the admin PIN.' : 'Initial setup: the store owner should set the admin PIN before handing this device to a cashier.') + '</p>' + adminForm());
+  const adjust = state.products.length ? form('adjust', '<label>Product<select name="id">' + products() + '</select></label><label>Movement<select name="kind">' + options(['Receive units', 'Receive cartons or cases', 'Stock count', 'Damage', 'Expiry']) + '</select></label>' + counter('quantity', 'Quantity') + field('reason', 'Reason or delivery reference'), 'Save movement') : '<p>Add a product to record a movement.</p>';
+  return inventory + panel('Admin session', '<button class="secondary" data-lock>Lock stock controls</button>')
+    + '<div class="grid">' + panel('Add product', form('product', field('name','Product name') + field('barcode','Barcode',false) + '<label>Category<select name="category">' + options(categories) + '</select></label><label>Selling unit<select name="unit">' + options(units) + '</select></label>' + amount('Selling price') + counter('quantity','Opening units') + counter('pack','Selling units per carton or case',1) + counter('low','Low-stock threshold'), 'Add product')) + panel('Record stock movement', adjust) + '</div>';
 }
 
 function sell() {
   if (!active()) return panel('Open the drawer to start selling', '<button data-page="Cash Drawer">Open Shift</button>');
   const lines = state.products.filter(product => cart.has(product.id));
   const due = lines.reduce((sum, product) => sum + product.price * cart.get(product.id), 0);
-  return '<div class="grid">' + panel('Find a product', '<label>Search by name or barcode<input id="search" type="search" autocomplete="off"></label><div id="matches" class="list"></div>')
+  return '<div class="grid">' + panel('Find a product', '<label>Search by name, barcode or category<input id="search" type="search" autocomplete="off"></label><div id="matches" class="list"></div>')
     + panel('Cart', list(lines.map(product => '<div class="row"><strong>' + escape(product.name) + '</strong><span>' + cart.get(product.id) + ' × ' + money(product.price) + '</span><button class="secondary" data-remove="' + product.id + '">Remove one</button></div>'), 'Add products to start a sale.')
-    + '<p><strong>Total ' + money(due) + '</strong></p>' + (lines.length ? form('sale', '<label>Payment method<select name="method">' + options(methods) + '</select></label><label id="tender">Cash received (₦)<input name="tender" type="number" min="0" step="0.01" required></label><output id="change"></output>', 'Complete sale') : '')) + '</div>';
+    + '<p><strong>Total ' + money(due) + '</strong></p>' + (lines.length ? form('sale', '<label>Payment method<select name="method">' + options(methods) + '</select></label><label id="tender">Cash received (₦)<input name="tender" type="number" min="0" step="0.01" required></label><output id="change"></output><label id="reference" hidden>Terminal or transfer reference<input name="reference" maxlength="150" placeholder="Optional"></label><label id="payment-confirm" class="checkbox" hidden><input type="checkbox" name="confirmed">I checked that payment was received</label>', 'Complete sale') : '')) + '</div>';
 }
 
 function matches(query = '') {
   const target = document.querySelector('#matches');
   if (!target) return;
   const search = query.trim().toLowerCase();
-  const found = state.products.filter(product => product.name.toLowerCase().includes(search) || product.barcode.includes(search));
+  const found = state.products.filter(product => product.name.toLowerCase().includes(search) || product.barcode.includes(search) || (product.category || '').toLowerCase().includes(search));
   target.innerHTML = found.map(product => '<div class="row"><span><strong>' + escape(product.name) + '</strong><br>' + money(product.price) + ' · ' + product.quantity + ' left</span><button data-add="' + product.id + '" ' + (product.quantity <= (cart.get(product.id) || 0) ? 'disabled' : '') + '>Add</button></div>').join('') || '<p>No products found.</p>';
 }
 
@@ -84,7 +98,7 @@ function reports() {
   const shifts = state.shifts.filter(shift => shift.closed && onDay(shift.closed.at));
   return panel('Reporting date', '<label>Date<input id="report-day" type="date" value="' + reportDay + '"></label>')
     + '<div class="cards">' + metric('Total sales', money(total(sales))) + methods.map(method => metric(method, money(total(sales.filter(sale => sale.method === method))))).join('') + '</div>'
-    + panel('Sales', list(sales.map(sale => row(escape(sale.lines.map(line => line.quantity + ' × ' + line.name).join(', ')) + '<br><small>' + time(sale.at) + ' · ' + sale.method + '</small>', money(sale.total))), 'No sales for this date.'))
+    + panel('Sales', list(sales.map(sale => row(escape(sale.lines.map(line => line.quantity + ' × ' + line.name).join(', ')) + '<br><small>' + time(sale.at) + ' · ' + sale.method + (sale.reference ? ' · Ref ' + escape(sale.reference) : '') + '</small>', money(sale.total))), 'No sales for this date.'))
     + panel('Closed shifts', list(shifts.map(shift => row(escape(shift.operator) + ' · ' + time(shift.closed.at) + '<br><small>Expected ' + money(shift.closed.expected) + ' · Counted ' + money(shift.closed.actual) + ' · ' + escape(shift.closed.reason) + '</small>', discrepancy(shift.closed.actual - shift.closed.expected))), 'No closed shifts for this date.'))
     + panel('Stock movements', list(state.stock.filter(move => onDay(move.at)).map(move => row(escape(move.name) + ' · ' + escape(move.reason), (move.quantity > 0 ? '+' : '') + move.quantity)), 'No stock movements for this date.'));
 }
@@ -100,9 +114,15 @@ document.addEventListener('click', event => {
   const button = event.target.closest('button');
   if (!button) return;
   if (button.dataset.page) {
+    if (button.dataset.page !== "Stock") admin = false;
     page = button.dataset.page;
     render();
     window.scrollTo(0,0);
+  }
+  if (button.hasAttribute('data-lock')) {
+    admin = false;
+    render();
+    return;
   }
   const id = button.dataset.add || button.dataset.remove;
   if (!id) return;
@@ -122,6 +142,9 @@ document.addEventListener('input', event => {
   const cash = sale.elements.method.value === 'Cash';
   document.querySelector('#tender').hidden = !cash;
   sale.elements.tender.required = cash;
+  document.querySelector('#reference').hidden = cash;
+  document.querySelector('#payment-confirm').hidden = cash;
+  sale.elements.confirmed.required = !cash;
   const due = [...cart].reduce((sum, [id, quantity]) => sum + state.products.find(product => product.id === id).price * quantity, 0);
   const tender = Math.round(Number(sale.elements.tender.value) * 100);
   document.querySelector('#change').textContent = cash && sale.elements.tender.value && tender >= due ? 'Change ' + money(tender - due) : '';
@@ -133,7 +156,7 @@ document.addEventListener('change', event => {
   }
 });
 
-document.addEventListener('submit', event => {
+document.addEventListener('submit', async event => {
   event.preventDefault();
   const data = new FormData(event.target);
   const value = name => String(data.get(name) ?? '').trim();
@@ -142,6 +165,27 @@ document.addEventListener('submit', event => {
     return value(name);
   };
   const cents = name => Math.round(Number(value(name)) * 100);
+  if (event.target.id === 'admin') {
+    const button = event.target.querySelector('button');
+    button.disabled = true;
+    try {
+      const pin = value('pin');
+      const saved = JSON.parse(localStorage.getItem(adminKey) || 'null');
+      const salt = saved?.salt ?? crypto.randomUUID();
+      const hash = await pinHash(pin, salt);
+      if (saved && saved.hash !== hash) throw Error('Incorrect admin PIN.');
+      if (!saved) {
+        if (localStorage.getItem(adminKey)) throw Error('The admin PIN was set in another tab. Try again.');
+        localStorage.setItem(adminKey, JSON.stringify({salt,hash}));
+      }
+      admin = true;
+      render();
+    } catch (error) {
+      message(error.message);
+      button.disabled = false;
+    }
+    return;
+  }
   const previous = structuredClone(state);
   const at = Date.now();
   const shift = active();
@@ -149,18 +193,20 @@ document.addEventListener('submit', event => {
   try {
     switch (event.target.id) {
       case 'product': {
+        if (!admin) throw Error('Admin access is required to add products.');
         const barcode = value('barcode');
         if (barcode && state.products.some(product => product.barcode === barcode)) throw Error('That barcode is already assigned.');
-        const product = { id: crypto.randomUUID(), name: required('name'), barcode, price: cents('amount'), quantity: Number(value('quantity')), pack: Number(value('pack')), low: Number(value('low')) };
+        const product = { id: crypto.randomUUID(), name: required('name'), barcode, category: value('category'), unit: value('unit'), price: cents('amount'), quantity: Number(value('quantity')), pack: Number(value('pack')), low: Number(value('low')) };
         state.products.push(product);
         record(product, product.quantity, 'Opening stock');
         break;
       }
       case 'adjust': {
+        if (!admin) throw Error('Admin access is required to change stock.');
         const product = state.products.find(item => item.id === value('id'));
         const quantity = Number(value('quantity'));
         const kind = value('kind');
-        const delta = {'Receive units': quantity, 'Receive cartons': quantity * product.pack, 'Stock count': quantity - product.quantity, Damage: -quantity, Expiry: -quantity}[kind];
+        const delta = {'Receive units': quantity, 'Receive cartons or cases': quantity * product.pack, 'Stock count': quantity - product.quantity, Damage: -quantity, Expiry: -quantity}[kind];
         if (product.quantity + delta < 0) throw Error('Movement would leave negative stock.');
         product.quantity += delta;
         record(product, delta, kind + ' · ' + required('reason'));
@@ -187,7 +233,9 @@ document.addEventListener('submit', event => {
       }
       case 'sale': {
         const method = value('method');
+        if (method !== 'Cash' && !data.has('confirmed')) throw Error('Confirm payment before completing this sale.');
         const sale = checkout(state, shift, cart, method, at);
+        if (method !== 'Cash') sale.reference = value('reference');
         if (method === 'Cash' && cents('tender') < sale.total) throw Error('Cash received is below the sale total.');
         break;
       }
@@ -204,6 +252,11 @@ document.addEventListener('submit', event => {
   render();
 });
 window.addEventListener('storage', event => {
+  if (event.key === adminKey) {
+    admin = false;
+    render();
+    return;
+  }
   if (event.key !== key) return;
   state = JSON.parse(event.newValue || 'null') ?? initial();
   cart.clear();

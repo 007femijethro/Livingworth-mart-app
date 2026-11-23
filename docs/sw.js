@@ -1,4 +1,4 @@
-const cacheName = 'rehoboth-pilot-v2';
+const cacheName = 'rehoboth-pilot-v3';
 const assets = ['./', './index.html', './style.css', './app.js', './store.mjs', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(cacheName).then(cache => cache.addAll(assets)));
