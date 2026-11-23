@@ -134,7 +134,8 @@ function stock() {
   const adjust = activeProducts().length ? form('adjust', selectProduct('id','Product') + '<label>Movement<select name="kind">' + options(movementKinds) + '</select></label>' + counter('quantity','Quantity') + field('reason','Reason or delivery reference'), 'Save movement') : '<p>Add a product to record a movement.</p>';
   const setup = activeProducts().length ? popup('pricing','Set selling options', form('pricing', selectProduct('id','Product') + unitField + groupFields + bulkFields, 'Save selling options')) : '';
   const merge = activeProducts().length > 1 ? popup('merge','Combine existing products', form('merge', selectProduct('id','Keep this product (base units)') + selectProduct('source','Convert this product (bags or cartons)') + unitField + groupFields + bulkFields + '<output id="conversion"></output>', 'Combine products')) : '';
-  return '<div class="toolbar">' + launch('product','Add product') + (activeProducts().length ? launch('adjust','Record movement') : '') + (merge ? launch('merge','Combine products') : '') + '</div>'
+  return '<div class="toolbar">' + launch('product','Add product') + (activeProducts().length ? launch('inventory-actions','More actions') : '') + '</div>'
+    + popup('inventory-actions','Inventory actions','<div class="action-list">' + launch('adjust','Record stock movement') + (merge ? launch('merge','Combine products') : '') + '</div>')
     + waterNotice + inventory + details + popup('product','Add product',form('product',field('name','Product name') + field('barcode','Barcode',false) + '<label>Category<select name="category">' + options(categories) + '</select></label>' + unitField + groupFields + bulkFields + counter('quantity','Opening base units') + counter('low','Low-stock threshold in base units'), 'Add product'))
     + popup('adjust','Record stock movement',adjust) + setup + merge
     + popup('delete-product','Delete item','<p id="delete-summary"></p><p>It will be removed from Inventory and Checkout. Past sales and stock history will remain in Reports.</p><form id="delete-product"><input type="hidden" name="id"><div class="toolbar"><button type="button" class="secondary" data-dismiss>Cancel</button><button type="submit" class="danger">Delete item</button></div></form>');
@@ -200,18 +201,20 @@ function drawer() {
   return '<div class="cards">' + metric('Opening cash', money(shift.opening)) + metric('Opened by', escape(shift.operator)) + '</div>'
     + '<div class="toolbar">' + launch('move','Cash in or out') + launch('close','Close shift') + '</div>' + popup('move','Cash in or out', form('move', '<label>Direction<select name="direction">' + options(['Cash in','Cash out']) + '</select></label>' + amount('Amount') + field('reason','Reason'), 'Record movement'))
     + popup('close','Close shift', form('close', amount('Actual cash counted') + field('reason','Note (required if there is a difference)',false), 'Submit closing count'))
-    + panel('Cash movements', list(shift.moves.map(move => row(escape(move.reason), money(move.amount))), 'No cash movements yet.'));
+    + '<div class="toolbar">' + launch('cash-history','Cash movement history') + '</div>'
+    + popup('cash-history','Cash movement history',list(shift.moves.map(move => row(escape(move.reason), money(move.amount))), 'No cash movements yet.'));
 }
 
 function reports() {
   const onDay = value => day.format(new Date(value)) === reportDay;
   const sales = state.sales.filter(sale => onDay(sale.at));
   const shifts = state.shifts.filter(shift => shift.closed && onDay(shift.closed.at));
-  return panel('Reporting date', '<label>Date<input id="report-day" type="date" value="' + reportDay + '"></label>')
+  return '<div class="toolbar">' + launch('report-date', 'Date · ' + escape(reportDay)) + launch('report-sales','Sales history') + launch('report-shifts','Closed shifts') + launch('report-stock','Stock movements') + '</div>'
+    + popup('report-date','Reporting date','<label>Date<input id="report-day" type="date" value="' + escape(reportDay) + '"></label>')
     + '<div class="cards">' + metric('Total sales', money(total(sales))) + methods.map(method => metric(method, money(total(sales.filter(sale => sale.method === method))))).join('') + '</div>'
-    + panel('Sales', list(sales.map(sale => row(escape(sale.lines.map(line => line.quantity + ' × ' + line.name + (line.label ? ' (' + line.label + ')' : '')).join(', ')) + '<br><small>' + time(sale.at) + ' · ' + (sale.operator ? escape(sale.operator) + ' · ' : '') + sale.method + (sale.reference ? ' · Ref ' + escape(sale.reference) : '') + '</small>', money(sale.total))), 'No sales for this date.'))
-    + panel('Closed shifts', list(shifts.map(shift => row(escape(shift.operator) + ' · ' + time(shift.closed.at) + '<br><small>Expected ' + money(shift.closed.expected) + ' · Counted ' + money(shift.closed.actual) + ' · ' + escape(shift.closed.reason) + '</small>', discrepancy(shift.closed.actual - shift.closed.expected))), 'No closed shifts for this date.'))
-    + panel('Stock movements', list(state.stock.filter(move => onDay(move.at)).map(move => row(escape(move.name) + ' · ' + escape(move.reason), (move.quantity > 0 ? '+' : '') + move.quantity)), 'No stock movements for this date.'));
+    + popup('report-sales','Sales history', list(sales.map(sale => row(escape(sale.lines.map(line => line.quantity + ' × ' + line.name + (line.label ? ' (' + line.label + ')' : '')).join(', ')) + '<br><small>' + time(sale.at) + ' · ' + (sale.operator ? escape(sale.operator) + ' · ' : '') + sale.method + (sale.reference ? ' · Ref ' + escape(sale.reference) : '') + '</small>', money(sale.total))), 'No sales for this date.'))
+    + popup('report-shifts','Closed shifts', list(shifts.map(shift => row(escape(shift.operator) + ' · ' + time(shift.closed.at) + '<br><small>Expected ' + money(shift.closed.expected) + ' · Counted ' + money(shift.closed.actual) + ' · ' + escape(shift.closed.reason) + '</small>', discrepancy(shift.closed.actual - shift.closed.expected))), 'No closed shifts for this date.'))
+    + popup('report-stock','Stock movements', list(state.stock.filter(move => onDay(move.at)).map(move => row(escape(move.name) + ' · ' + escape(move.reason), (move.quantity > 0 ? '+' : '') + move.quantity)), 'No stock movements for this date.'));
 }
 
 const passwordField = (name, label, minimum = 1) => '<label>' + label + '<input name="' + name + '" type="password" minlength="' + minimum + '" maxlength="128" required></label>';
@@ -359,7 +362,7 @@ document.addEventListener('input', event => {
     matches();
   }
   if (event.target.id === 'stock-search') document.querySelector('#stock-results').innerHTML = stockRows(event.target.value);
-  if (event.target.form?.id === 'merge') previewMerge(event.target.form);
+  if (event.target.form?.getAttribute('id') === 'merge') previewMerge(event.target.form);
   const sale = document.querySelector('#sale');
   if (!sale || !sale.contains(event.target)) return;
   const cash = sale.elements.method.value === 'Cash';
@@ -373,7 +376,7 @@ document.addEventListener('input', event => {
   document.querySelector('#change').textContent = cash && sale.elements.tender.value && tender >= due ? 'Change ' + money(tender - due) : '';
 });
 document.addEventListener('change', event => {
-  if (event.target.form?.id === 'pricing' && event.target.name === 'id') fillPricing();
+  if (event.target.form?.getAttribute('id') === 'pricing' && event.target.name === 'id') fillPricing();
   if (event.target.id === 'report-day' && event.target.value) {
     reportDay = event.target.value;
     render();
@@ -389,7 +392,7 @@ document.addEventListener('submit', async event => {
     return value(name);
   };
   const cents = name => Math.round(Number(value(name)) * 100);
-  const action = event.target.id;
+  const action = event.target.getAttribute('id');
   if (['setup','login','new-seller','reset-seller'].includes(action)) {
     const button = event.target.querySelector('button');
     button.disabled = true;
@@ -453,7 +456,7 @@ document.addEventListener('submit', async event => {
     if (bulkLabel) product.sellingOptions.push({label:bulkLabel,units:pack,price:cents('bulkPrice')});
   };
   try {
-    switch (event.target.id) {
+    switch (action) {
       case 'product': {
         if (!isAdmin()) throw Error('Admin access is required to add products.');
         const barcode = value('barcode');
@@ -549,7 +552,7 @@ document.addEventListener('submit', async event => {
   if (action === 'sale') lastSale = state.sales.at(-1);
   if (['sale','close','adjust','pricing','merge'].includes(action)) cart.clear();
   render();
-  message(event.target.id === 'close' ? discrepancy(shift.closed.actual - shift.closed.expected) : action === 'delete-product' ? 'Item deleted.' : 'Saved.');
+  message(action === 'close' ? discrepancy(shift.closed.actual - shift.closed.expected) : action === 'delete-product' ? 'Item deleted.' : 'Saved.');
 });
 window.addEventListener('pageshow', event => {
   if (!event.persisted) return;
