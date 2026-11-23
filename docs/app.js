@@ -4,11 +4,13 @@ const key = 'rehoboth-v1';
 let state = JSON.parse(localStorage.getItem(key) || 'null') ?? initial();
 const cart = new Map();
 const adminKey = 'livingworth-admin-v1';
-let admin = false;
+const staffKey = 'livingworth-staff-v1';
+const staff = () => JSON.parse(localStorage.getItem(staffKey) || '[]');
+let user = null;
+const isAdmin = () => user?.role === 'admin';
 const categories = ['Food staples', 'Drinks and water', 'Snacks and biscuits', 'Toiletries', 'Household and cleaning', 'Baby products', 'Other'];
 const units = ['Piece', 'Bottle', 'Sachet', 'Tin', 'Pack', 'Bag', 'Paint bucket'];
 const unitName = product => (product.unit || 'Unit').toLowerCase();
-const adminForm = () => form('admin', '<label>Admin PIN<input name="pin" type="password" inputmode="numeric" pattern="[0-9]{6,12}" required></label>', localStorage.getItem(adminKey) ? 'Unlock stock controls' : 'Set admin PIN');
 async function pinHash(pin, salt) {
   const encoder = new TextEncoder();
   const key = await crypto.subtle.importKey('raw', encoder.encode(pin), 'PBKDF2', false, ['deriveBits']);
@@ -60,9 +62,9 @@ function home() {
 
 function stock() {
   const inventory = panel('Stock on hand', list(state.products.map(product => row(escape(product.name) + ' · ' + money(product.price) + '<br><small>' + escape(product.category || 'Other') + ' · per ' + escape(unitName(product)) + '</small>', product.quantity + ' in stock')), 'No products have been added.'));
-  if (!admin) return inventory + panel('Admin access', '<p class="muted">' + (localStorage.getItem(adminKey) ? 'Stock changes require the admin PIN.' : 'Initial setup: the store owner should set the admin PIN before handing this device to a cashier.') + '</p>' + adminForm());
+  if (!isAdmin()) return inventory;
   const adjust = state.products.length ? form('adjust', '<label>Product<select name="id">' + products() + '</select></label><label>Movement<select name="kind">' + options(['Receive units', 'Receive cartons or cases', 'Stock count', 'Damage', 'Expiry']) + '</select></label>' + counter('quantity', 'Quantity') + field('reason', 'Reason or delivery reference'), 'Save movement') : '<p>Add a product to record a movement.</p>';
-  return inventory + panel('Admin session', '<button class="secondary" data-lock>Lock stock controls</button>')
+  return inventory
     + '<div class="grid">' + panel('Add product', form('product', field('name','Product name') + field('barcode','Barcode',false) + '<label>Category<select name="category">' + options(categories) + '</select></label><label>Selling unit<select name="unit">' + options(units) + '</select></label>' + amount('Selling price') + counter('quantity','Opening units') + counter('pack','Selling units per carton or case',1) + counter('low','Low-stock threshold'), 'Add product')) + panel('Record stock movement', adjust) + '</div>';
 }
 
@@ -85,7 +87,7 @@ function matches(query = '') {
 
 function drawer() {
   const shift = active();
-  if (!shift) return panel('Open shift', form('open', field('operator','Staff name') + amount('Opening cash'), 'Open shift'));
+  if (!shift) return panel('Open shift', form('open', amount('Opening cash'), 'Open shift'));
   return '<div class="cards">' + metric('Opening cash', money(shift.opening)) + metric('Opened by', escape(shift.operator)) + '</div>'
     + '<div class="grid">' + panel('Cash in or out', form('move', '<label>Direction<select name="direction">' + options(['Cash in','Cash out']) + '</select></label>' + amount('Amount') + field('reason','Reason'), 'Record movement'))
     + panel('Close shift', form('close', amount('Actual cash counted') + field('reason','Note (required if there is a difference)',false), 'Submit closing count')) + '</div>'
@@ -98,15 +100,36 @@ function reports() {
   const shifts = state.shifts.filter(shift => shift.closed && onDay(shift.closed.at));
   return panel('Reporting date', '<label>Date<input id="report-day" type="date" value="' + reportDay + '"></label>')
     + '<div class="cards">' + metric('Total sales', money(total(sales))) + methods.map(method => metric(method, money(total(sales.filter(sale => sale.method === method))))).join('') + '</div>'
-    + panel('Sales', list(sales.map(sale => row(escape(sale.lines.map(line => line.quantity + ' × ' + line.name).join(', ')) + '<br><small>' + time(sale.at) + ' · ' + sale.method + (sale.reference ? ' · Ref ' + escape(sale.reference) : '') + '</small>', money(sale.total))), 'No sales for this date.'))
+    + panel('Sales', list(sales.map(sale => row(escape(sale.lines.map(line => line.quantity + ' × ' + line.name).join(', ')) + '<br><small>' + time(sale.at) + ' · ' + (sale.operator ? escape(sale.operator) + ' · ' : '') + sale.method + (sale.reference ? ' · Ref ' + escape(sale.reference) : '') + '</small>', money(sale.total))), 'No sales for this date.'))
     + panel('Closed shifts', list(shifts.map(shift => row(escape(shift.operator) + ' · ' + time(shift.closed.at) + '<br><small>Expected ' + money(shift.closed.expected) + ' · Counted ' + money(shift.closed.actual) + ' · ' + escape(shift.closed.reason) + '</small>', discrepancy(shift.closed.actual - shift.closed.expected))), 'No closed shifts for this date.'))
     + panel('Stock movements', list(state.stock.filter(move => onDay(move.at)).map(move => row(escape(move.name) + ' · ' + escape(move.reason), (move.quantity > 0 ? '+' : '') + move.quantity)), 'No stock movements for this date.'));
 }
 
+const passwordField = (name, label, minimum = 1) => '<label>' + label + '<input name="' + name + '" type="password" minlength="' + minimum + '" maxlength="128" required></label>';
+const usernameField = () => '<label>Username<input name="username" autocomplete="username" minlength="3" maxlength="32" pattern="[a-zA-Z0-9._\\-]{3,32}" required></label>';
+
+function staffPage() {
+  const sellers = staff().filter(account => account.role === 'seller');
+  return panel('Create seller account', form('new-seller', field('name','Full name') + usernameField() + passwordField('password','Initial password',10), 'Create seller'))
+    + panel('Seller accounts', list(sellers.map(account => '<div class="row"><span><strong>' + escape(account.name) + '</strong><br><small>' + escape(account.username) + ' · ' + (account.disabled ? 'Disabled' : 'Active') + '</small></span><button class="secondary" data-toggle="' + account.id + '">' + (account.disabled ? 'Enable' : 'Disable') + '</button></div>'), 'No seller accounts yet.'))
+    + (sellers.length ? panel('Reset seller password', form('reset-seller', '<label>Seller<select name="id">' + sellers.map(account => '<option value="' + account.id + '">' + escape(account.username) + '</option>').join('') + '</select></label>' + passwordField('password','New password',10), 'Reset password')) : '');
+}
+
 function render() {
-  nav.innerHTML = pages.map(name => '<button data-page="' + name + '"' + (page === name ? ' aria-current="page"' : '') + '>' + name + '</button>').join('');
-  app.innerHTML = '<div class="eyebrow">' + time(Date.now()).split(' at ')[0] + '</div><h1>' + (page === 'Home' ? 'Store overview' : page) + '</h1>'
-    + ({Home:home, Sell:sell, Stock:stock, 'Cash Drawer':drawer, Reports:reports}[page])();
+  if (!user) {
+    nav.innerHTML = '';
+    const setup = staff().length === 0;
+    app.innerHTML = '<h1>' + (setup ? 'Set up Livingworth Mart' : 'Staff sign-in') + '</h1>' + panel(setup ? 'Create the store admin' : 'Rehoboth Supermarket',
+      form(setup ? 'setup' : 'login', (setup ? field('name','Admin name') : '') + usernameField()
+        + (setup && localStorage.getItem(adminKey) ? passwordField('pin','Existing admin PIN') : '')
+        + passwordField('password',setup ? 'Choose a password' : 'Password',setup ? 10 : 1), setup ? 'Create admin account' : 'Sign in'));
+    return;
+  }
+  const allowed = isAdmin() ? [...pages, 'Staff'] : pages.filter(name => name !== 'Reports');
+  if (!allowed.includes(page)) page = 'Home';
+  nav.innerHTML = allowed.map(name => '<button data-page="' + name + '"' + (page === name ? ' aria-current="page"' : '') + '>' + name + '</button>').join('') + '<button data-signout>Sign out</button>';
+  app.innerHTML = '<div class="eyebrow">' + escape(user.name) + ' · ' + (isAdmin() ? 'Admin' : 'Seller') + ' · ' + time(Date.now()).split(' at ')[0] + '</div><h1>' + (page === 'Home' ? 'Store overview' : page) + '</h1>'
+    + ({Home:home, Sell:sell, Stock:stock, 'Cash Drawer':drawer, Reports:reports, Staff:staffPage}[page])();
   matches();
 }
 
@@ -114,14 +137,25 @@ document.addEventListener('click', event => {
   const button = event.target.closest('button');
   if (!button) return;
   if (button.dataset.page) {
-    if (button.dataset.page !== "Stock") admin = false;
     page = button.dataset.page;
     render();
     window.scrollTo(0,0);
   }
-  if (button.hasAttribute('data-lock')) {
-    admin = false;
+  if (button.hasAttribute('data-signout')) {
+    user = null;
+    cart.clear();
+    page = 'Home';
     render();
+    return;
+  }
+  if (button.dataset.toggle && isAdmin()) {
+    const accounts = staff();
+    const seller = accounts.find(account => account.id === button.dataset.toggle && account.role === 'seller');
+    if (seller) {
+      seller.disabled = !seller.disabled;
+      localStorage.setItem(staffKey, JSON.stringify(accounts));
+      render();
+    }
     return;
   }
   const id = button.dataset.add || button.dataset.remove;
@@ -165,25 +199,50 @@ document.addEventListener('submit', async event => {
     return value(name);
   };
   const cents = name => Math.round(Number(value(name)) * 100);
-  if (event.target.id === 'admin') {
+  const action = event.target.id;
+  if (['setup','login','new-seller','reset-seller'].includes(action)) {
     const button = event.target.querySelector('button');
     button.disabled = true;
     try {
-      const pin = value('pin');
-      const saved = JSON.parse(localStorage.getItem(adminKey) || 'null');
-      const salt = saved?.salt ?? crypto.randomUUID();
-      const hash = await pinHash(pin, salt);
-      if (saved && saved.hash !== hash) throw Error('Incorrect admin PIN.');
-      if (!saved) {
-        if (localStorage.getItem(adminKey)) throw Error('The admin PIN was set in another tab. Try again.');
-        localStorage.setItem(adminKey, JSON.stringify({salt,hash}));
+      const password = String(data.get('password') ?? '');
+      const username = value('username').toLowerCase();
+      const accounts = staff();
+      const snapshot = JSON.stringify(accounts);
+      if (action === 'login') {
+        const account = accounts.find(item => item.username === username);
+        if (!account || account.disabled || await pinHash(password, account.salt) !== account.hash || JSON.stringify(staff()) !== snapshot) throw Error('Invalid username or password.');
+        user = {id:account.id, name:account.name, role:account.role};
+      } else {
+        if (action === 'setup') {
+          if (accounts.length) throw Error('The admin account already exists.');
+          const legacy = JSON.parse(localStorage.getItem(adminKey) || 'null');
+          if (legacy && await pinHash(value('pin'), legacy.salt) !== legacy.hash) throw Error('Incorrect existing admin PIN.');
+        } else if (!isAdmin()) throw Error('Admin access is required.');
+        if (password.length < 10 || password.length > 128) throw Error('Choose a password with 10–128 characters.');
+        const salt = crypto.randomUUID();
+        const hash = await pinHash(password, salt);
+        if (JSON.stringify(staff()) !== snapshot || (action !== 'setup' && !isAdmin())) throw Error('Staff accounts changed. Try again.');
+        if (action === 'reset-seller') {
+          const seller = accounts.find(item => item.id === value('id') && item.role === 'seller');
+          if (!seller) throw Error('Choose a seller.');
+          Object.assign(seller, {salt,hash});
+        } else {
+          if (!/^[a-z0-9._-]{3,32}$/.test(username)) throw Error('Enter a valid username.');
+          if (accounts.some(item => item.username === username)) throw Error('That username already exists.');
+          accounts.push({id:crypto.randomUUID(), name:required('name'), role:action === 'setup' ? 'admin' : 'seller', username, salt, hash});
+        }
+        localStorage.setItem(staffKey, JSON.stringify(accounts));
+        message(action === 'setup' ? 'Admin account created. Sign in to continue.' : 'Seller account saved.');
       }
-      admin = true;
       render();
     } catch (error) {
       message(error.message);
       button.disabled = false;
     }
+    return;
+  }
+  if (!user) {
+    message('Sign in to continue.');
     return;
   }
   const previous = structuredClone(state);
@@ -193,7 +252,7 @@ document.addEventListener('submit', async event => {
   try {
     switch (event.target.id) {
       case 'product': {
-        if (!admin) throw Error('Admin access is required to add products.');
+        if (!isAdmin()) throw Error('Admin access is required to add products.');
         const barcode = value('barcode');
         if (barcode && state.products.some(product => product.barcode === barcode)) throw Error('That barcode is already assigned.');
         const product = { id: crypto.randomUUID(), name: required('name'), barcode, category: value('category'), unit: value('unit'), price: cents('amount'), quantity: Number(value('quantity')), pack: Number(value('pack')), low: Number(value('low')) };
@@ -202,7 +261,7 @@ document.addEventListener('submit', async event => {
         break;
       }
       case 'adjust': {
-        if (!admin) throw Error('Admin access is required to change stock.');
+        if (!isAdmin()) throw Error('Admin access is required to change stock.');
         const product = state.products.find(item => item.id === value('id'));
         const quantity = Number(value('quantity'));
         const kind = value('kind');
@@ -214,13 +273,13 @@ document.addEventListener('submit', async event => {
       }
       case 'open':
         if (shift) throw Error('Close the active shift first.');
-        state.shifts.push({ id: crypto.randomUUID(), at, operator: required('operator'), opening: cents('amount'), moves: [] });
+        state.shifts.push({ id: crypto.randomUUID(), at, operator: user.name, operatorId: user.id, opening: cents('amount'), moves: [] });
         break;
       case 'move': {
         const amount = cents('amount') * (value('direction') === 'Cash in' ? 1 : -1);
         if (!shift || !amount) throw Error('Enter a cash movement greater than zero.');
         if (expected(state, shift) + amount < 0) throw Error('Cash out exceeds expected drawer cash.');
-        shift.moves.push({ at, amount, reason: required('reason') });
+        shift.moves.push({ at, amount, reason: required('reason'), operator: user.name, operatorId: user.id });
         break;
       }
       case 'close': {
@@ -228,13 +287,15 @@ document.addEventListener('submit', async event => {
         const actual = cents('amount');
         const balance = expected(state, shift);
         if (actual !== balance && !value('reason')) throw Error('Enter a note for the cash difference.');
-        shift.closed = { at, actual, expected: balance, reason: value('reason') };
+        shift.closed = { at, actual, expected: balance, reason: value('reason'), operator: user.name, operatorId: user.id };
         break;
       }
       case 'sale': {
         const method = value('method');
         if (method !== 'Cash' && !data.has('confirmed')) throw Error('Confirm payment before completing this sale.');
         const sale = checkout(state, shift, cart, method, at);
+        sale.operator = user.name;
+        sale.operatorId = user.id;
         if (method !== 'Cash') sale.reference = value('reference');
         if (method === 'Cash' && cents('tender') < sale.total) throw Error('Cash received is below the sale total.');
         break;
@@ -252,8 +313,9 @@ document.addEventListener('submit', async event => {
   render();
 });
 window.addEventListener('storage', event => {
-  if (event.key === adminKey) {
-    admin = false;
+  if (event.key === staffKey) {
+    user = null;
+    cart.clear();
     render();
     return;
   }
