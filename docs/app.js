@@ -69,6 +69,12 @@ const stockLabel = product => {
   return count + ' ' + product.bulkLabel.toLowerCase() + (count === 1 ? '' : 's')
     + (remainder ? ' + ' + remainder + ' ' + unitName(product) + (remainder === 1 ? '' : 's') : '') + ' · ' + total + ' total';
 };
+const waterEntries = () => {
+  const products = activeProducts();
+  const base = products.find(product => /^pure water$/i.test(product.name.trim()) && !product.bulkLabel);
+  const bag = products.find(product => /^pure water\s*\(bag\)$/i.test(product.name.trim()));
+  return base && bag ? {base, bag} : null;
+};
 const selectProduct = (name, label) => '<label>' + label + '<select name="' + name + '">' + products() + '</select></label>';
 const unitField = '<label>Base stock unit<select name="unit">' + options(units) + '</select></label>';
 const bulkFields = field('bulkLabel','Bulk name (e.g. Bag or Carton)',false)
@@ -95,11 +101,14 @@ function stock() {
   const inventory = panel('Stock on hand', list(activeProducts().map(product => row(
     escape(product.name) + '<br><small>' + sellingOptions(product).map(option => escape(option.label) + ' ' + money(option.price)).join(' · ') + '</small>',
     escape(stockLabel(product)))), 'No products have been added.'));
-  if (!isAdmin()) return inventory;
+  const waterSetup = waterEntries();
+  const waterNotice = waterSetup ? panel('Combine Pure Water stock', '<p>The two Pure Water entries need one shared balance. Combine them to make the sachets inside each bag available at checkout.</p>'
+    + (isAdmin() ? '<button type="button" data-water-setup>Set up Pure Water</button>' : '<p>Ask an admin to combine the entries.</p>')) : '';
+  if (!isAdmin()) return waterNotice + inventory;
   const adjust = activeProducts().length ? form('adjust', selectProduct('id','Product') + '<label>Movement<select name="kind">' + options(movementKinds) + '</select></label>' + counter('quantity','Quantity') + field('reason','Reason or delivery reference'), 'Save movement') : '<p>Add a product to record a movement.</p>';
   const setup = activeProducts().length ? panel('Set selling options', form('pricing', selectProduct('id','Product') + unitField + groupFields + bulkFields, 'Save selling options')) : '';
   const merge = activeProducts().length > 1 ? panel('Combine existing products', form('merge', selectProduct('id','Keep this product (base units)') + selectProduct('source','Convert this product (bags or cartons)') + unitField + groupFields + bulkFields + '<output id="conversion"></output>', 'Combine products')) : '';
-  return inventory + '<div class="grid">'
+  return waterNotice + inventory + '<div class="grid">'
     + panel('Add product',form('product',field('name','Product name') + field('barcode','Barcode',false) + '<label>Category<select name="category">' + options(categories) + '</select></label>' + unitField + groupFields + bulkFields + counter('quantity','Opening base units') + counter('low','Low-stock threshold in base units'), 'Add product'))
     + panel('Record stock movement',adjust) + setup + merge + '</div>';
 }
@@ -108,7 +117,8 @@ function sell() {
   if (!active()) return panel('Open the drawer to start selling', '<button data-page="Cash Drawer">Open Shift</button>');
   const lines = cartLines(state, cart);
   const due = lines.reduce((sum,line) => sum + line.price * line.quantity, 0);
-  return '<div class="grid">' + panel('Find a product', '<label>Search by name, barcode or category<input id="search" type="search" autocomplete="off"></label><div id="matches" class="list"></div>')
+  const waterNotice = waterEntries() ? panel('Pure Water stock setup', '<p>Pure Water has two product entries. Combine them in Stock so the sachets inside the bags can be sold from the same balance.</p>' + (isAdmin() ? '<button data-page="Stock">Go to Stock</button>' : '')) : '';
+  return waterNotice + '<div class="grid">' + panel('Find a product', '<label>Search by name, barcode or category<input id="search" type="search" autocomplete="off"></label><div id="matches" class="list"></div>')
     + panel('Cart', list(lines.map(line => '<div class="row"><strong>' + escape(line.name + ' · ' + line.label) + '</strong><span>' + line.quantity + ' × ' + money(line.price) + '</span><button class="secondary" data-remove="' + line.key + '">Remove one</button></div>'), 'Add products to start a sale.')
     + '<p><strong>Total ' + money(due) + '</strong></p>' + (lines.length ? form('sale', '<label>Payment method<select name="method">' + options(methods) + '</select></label><label id="tender">Cash received (₦)<input name="tender" type="number" min="0" step="0.01" required></label><output id="change"></output><label id="reference" hidden>Terminal or transfer reference<input name="reference" maxlength="150" placeholder="Optional"></label><label id="payment-confirm" class="checkbox" hidden><input type="checkbox" name="confirmed">I checked that payment was received</label>', 'Complete sale') : '')) + '</div>';
 }
@@ -121,7 +131,7 @@ function matches(query = '') {
   const used = new Map();
   for (const line of cartLines(state,cart)) used.set(line.id,(used.get(line.id) || 0) + line.units);
   target.innerHTML = found.map(product => '<div><strong>' + escape(product.name) + '</strong><p class="muted">' + escape(stockLabel(product)) + '</p><div class="sell-options">'
-    + sellingOptions(product).map((option,index) => '<button data-add="' + product.id + ':' + index + '" ' + (product.quantity - (used.get(product.id) || 0) < option.units ? 'disabled' : '') + '>' + escape(option.label) + ' · ' + money(option.price) + '</button>').join('') + '</div></div>').join('') || '<p>No products found.</p>';
+    + sellingOptions(product).map((option,index) => '<div class="sell-option"><button data-add="' + product.id + ':' + index + '" ' + (product.quantity - (used.get(product.id) || 0) < option.units ? 'disabled' : '') + '>' + escape(option.label) + ' · ' + money(option.price) + '</button>' + '<small class="option-stock">' + Math.floor((product.quantity - (used.get(product.id) || 0)) / option.units) + ' available</small></div>').join('') + '</div></div>').join('') || '<p>No products found.</p>';
 }
 
 function drawer() {
@@ -173,9 +183,36 @@ function render() {
   fillPricing();
 }
 
+function previewMerge(merge) {
+  const target = activeProducts().find(product => product.id === merge.elements.id.value);
+  const source = activeProducts().find(product => product.id === merge.elements.source.value);
+  const pack = Number(merge.elements.pack.value);
+  document.querySelector('#conversion').textContent = target && source && target !== source && pack > 1
+    ? target.quantity + ' + ' + source.quantity + ' × ' + pack + ' = ' + (target.quantity + source.quantity * pack) + ' base units after combining.'
+    : 'Choose two different entries and enter the units per bag or carton.';
+}
+
 document.addEventListener('click', event => {
   const button = event.target.closest('button');
   if (!button) return;
+  if (button.hasAttribute('data-water-setup') && isAdmin()) {
+    const entries = waterEntries();
+    const merge = document.querySelector('#merge');
+    if (!entries || !merge) return;
+    const fields = merge.elements;
+    fields.id.value = entries.base.id;
+    fields.source.value = entries.bag.id;
+    fields.unit.value = 'Sachet';
+    fields.group.value = 1;
+    fields.amount.value = entries.base.price / 100;
+    fields.bulkLabel.value = 'Bag';
+    fields.bulkPrice.value = entries.bag.price / 100;
+    fields.pack.value = 20;
+    previewMerge(merge);
+    merge.scrollIntoView({block:'nearest'});
+    fields.amount.focus();
+    return;
+  }
   if (button.dataset.page) {
     page = button.dataset.page;
     render();
@@ -211,15 +248,7 @@ document.addEventListener('click', event => {
 
 document.addEventListener('input', event => {
   if (event.target.id === 'search') matches(event.target.value);
-  const merge = document.querySelector('#merge');
-  if (merge?.contains(event.target)) {
-    const target = activeProducts().find(product => product.id === merge.elements.id.value);
-    const source = activeProducts().find(product => product.id === merge.elements.source.value);
-    const pack = Number(merge.elements.pack.value);
-    document.querySelector('#conversion').textContent = target && source && target !== source && pack > 1
-      ? target.quantity + ' + ' + source.quantity + ' × ' + pack + ' = ' + (target.quantity + source.quantity * pack) + ' base units after combining.'
-      : 'Choose two different entries and enter the units per bag or carton.';
-  }
+  if (event.target.form?.id === 'merge') previewMerge(event.target.form);
   const sale = document.querySelector('#sale');
   if (!sale || !sale.contains(event.target)) return;
   const cash = sale.elements.method.value === 'Cash';

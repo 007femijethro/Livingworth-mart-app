@@ -3,3 +3,5 @@
 
 .checkbox{display:flex;align-items:center;gap:8px}.checkbox input{width:20px;min-height:20px}
 .sell-options{display:flex;gap:8px;flex-wrap:wrap}
+
+.sell-option{display:grid;gap:4px}.option-stock{color:#526456;font-size:.875rem;padding-inline:4px}
