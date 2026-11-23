@@ -136,7 +136,8 @@ function stock() {
   const merge = activeProducts().length > 1 ? popup('merge','Combine existing products', form('merge', selectProduct('id','Keep this product (base units)') + selectProduct('source','Convert this product (bags or cartons)') + unitField + groupFields + bulkFields + '<output id="conversion"></output>', 'Combine products')) : '';
   return '<div class="toolbar">' + launch('product','Add product') + (activeProducts().length ? launch('adjust','Record movement') : '') + (merge ? launch('merge','Combine products') : '') + '</div>'
     + waterNotice + inventory + details + popup('product','Add product',form('product',field('name','Product name') + field('barcode','Barcode',false) + '<label>Category<select name="category">' + options(categories) + '</select></label>' + unitField + groupFields + bulkFields + counter('quantity','Opening base units') + counter('low','Low-stock threshold in base units'), 'Add product'))
-    + popup('adjust','Record stock movement',adjust) + setup + merge;
+    + popup('adjust','Record stock movement',adjust) + setup + merge
+    + popup('delete-product','Delete item','<p id="delete-summary"></p><p>It will be removed from Inventory and Checkout. Past sales and stock history will remain in Reports.</p><form id="delete-product"><input type="hidden" name="id"><div class="toolbar"><button type="button" class="secondary" data-dismiss>Cancel</button><button class="danger">Delete item</button></div></form>');
 }
 
 const departments = ['All products', ...categories];
@@ -280,11 +281,19 @@ document.addEventListener('click', event => {
     if (product) showSellingOptions(product);
     return;
   }
+  if (button.dataset.deleteItem && isAdmin()) {
+    const product = activeProducts().find(item => item.id === button.dataset.deleteItem);
+    if (!product) return;
+    document.querySelector('#delete-product').elements.id.value = product.id;
+    document.querySelector('#delete-summary').textContent = 'Delete ' + product.name + '? Stock on hand: ' + stockLabel(product) + '.';
+    openPopup('delete-product');
+    return;
+  }
   if (button.dataset.stockItem) {
     const product = activeProducts().find(item => item.id === button.dataset.stockItem);
     if (!product) return;
     document.querySelector('#title-stock-item').textContent = product.name;
-    const actions = isAdmin() ? '<div class="toolbar"><button data-dialog="pricing" data-product="' + product.id + '">Edit selling options</button><button class="secondary" data-dialog="adjust" data-product="' + product.id + '">Record movement</button></div>' : '';
+    const actions = isAdmin() ? '<div class="toolbar"><button data-dialog="pricing" data-product="' + product.id + '">Edit selling options</button><button class="secondary" data-dialog="adjust" data-product="' + product.id + '">Record movement</button><button class="danger" data-delete-item="' + product.id + '">Delete item</button></div>' : '';
     document.querySelector('#stock-details').innerHTML = '<p>' + escape(stockLabel(product)) + '</p>' + list(sellingOptions(product).map(option => row(escape(option.label),money(option.price))), '') + actions;
     openPopup('stock-item');
     return;
@@ -448,7 +457,7 @@ document.addEventListener('submit', async event => {
       case 'product': {
         if (!isAdmin()) throw Error('Admin access is required to add products.');
         const barcode = value('barcode');
-        if (barcode && state.products.some(product => (product.barcode === barcode || product.barcodes?.includes(barcode)))) throw Error('That barcode is already assigned.');
+        if (barcode && activeProducts().some(product => (product.barcode === barcode || product.barcodes?.includes(barcode)))) throw Error('That barcode is already assigned.');
         const product = { id: crypto.randomUUID(), name: required('name'), barcode, category: value('category'), unit: value('unit'), price: cents('amount'), quantity: Number(value('quantity')), pack: Number(value('pack')), low: Number(value('low')) };
         configure(product);
         state.products.push(product);
@@ -473,6 +482,15 @@ document.addEventListener('submit', async event => {
           source.quantity = 0;
           source.archived = true;
         }
+        break;
+      }
+      case 'delete-product': {
+        if (!isAdmin()) throw Error('Admin access is required to delete items.');
+        const product = activeProducts().find(item => item.id === value('id'));
+        if (!product) throw Error('This item is already unavailable.');
+        record(product, -product.quantity, 'Item deleted by ' + user.name);
+        product.archived = true;
+        product.quantity = 0;
         break;
       }
       case 'adjust': {
@@ -523,10 +541,15 @@ document.addEventListener('submit', async event => {
     message(error.message);
     return;
   }
+  if (action === 'delete-product') {
+    for (const item of cart.keys()) {
+      if (item.split(':')[0] === value('id')) cart.delete(item);
+    }
+  }
   if (action === 'sale') lastSale = state.sales.at(-1);
   if (['sale','close','adjust','pricing','merge'].includes(action)) cart.clear();
   render();
-  message(event.target.id === 'close' ? discrepancy(shift.closed.actual - shift.closed.expected) : 'Saved.');
+  message(event.target.id === 'close' ? discrepancy(shift.closed.actual - shift.closed.expected) : action === 'delete-product' ? 'Item deleted.' : 'Saved.');
 });
 window.addEventListener('storage', event => {
   if (event.key === staffKey) {
