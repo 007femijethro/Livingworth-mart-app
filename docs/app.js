@@ -121,7 +121,7 @@ function openPopup(id) {
 
 function stockRows(query = '') {
   const term = query.trim().toLowerCase();
-  return list(activeProducts().filter(product => product.name.toLowerCase().includes(term) || (product.category || '').toLowerCase().includes(term)).map(product => '<div class="row"><span><strong>' + escape(product.name) + '</strong><br><small>' + escape(product.category || 'Other') + (product.sample ? ' · Starter item' : '') + '</small></span><span class="stock-actions"><strong>' + escape(stockLabel(product)) + '</strong><button class="secondary" data-stock-item="' + product.id + '">Details</button></span></div>'), 'No matching products.');
+  return list(activeProducts().filter(product => product.name.toLowerCase().includes(term) || (product.category || '').toLowerCase().includes(term)).map(product => '<div class="row"><span><strong>' + escape(product.name) + '</strong><br><small>' + escape(product.category || 'Other') + (product.sample ? ' · Starter item' : '') + '</small></span><span class="stock-actions"><strong>' + escape(stockLabel(product)) + '</strong><button class="secondary" data-stock-item="' + product.id + '">Details</button>' + (isAdmin() ? '<button type="button" class="delete-link" data-delete-item="' + product.id + '" aria-label="Delete ' + escape(product.name) + '">Delete</button>' : '') + '</span></div>'), 'No matching products.');
 }
 
 function stock() {
@@ -137,7 +137,7 @@ function stock() {
   return '<div class="toolbar">' + launch('product','Add product') + (activeProducts().length ? launch('adjust','Record movement') : '') + (merge ? launch('merge','Combine products') : '') + '</div>'
     + waterNotice + inventory + details + popup('product','Add product',form('product',field('name','Product name') + field('barcode','Barcode',false) + '<label>Category<select name="category">' + options(categories) + '</select></label>' + unitField + groupFields + bulkFields + counter('quantity','Opening base units') + counter('low','Low-stock threshold in base units'), 'Add product'))
     + popup('adjust','Record stock movement',adjust) + setup + merge
-    + popup('delete-product','Delete item','<p id="delete-summary"></p><p>It will be removed from Inventory and Checkout. Past sales and stock history will remain in Reports.</p><form id="delete-product"><input type="hidden" name="id"><div class="toolbar"><button type="button" class="secondary" data-dismiss>Cancel</button><button class="danger">Delete item</button></div></form>');
+    + popup('delete-product','Delete item','<p id="delete-summary"></p><p>It will be removed from Inventory and Checkout. Past sales and stock history will remain in Reports.</p><form id="delete-product"><input type="hidden" name="id"><div class="toolbar"><button type="button" class="secondary" data-dismiss>Cancel</button><button type="submit" class="danger">Delete item</button></div></form>');
 }
 
 const departments = ['All products', ...categories];
@@ -284,7 +284,7 @@ document.addEventListener('click', event => {
   if (button.dataset.deleteItem && isAdmin()) {
     const product = activeProducts().find(item => item.id === button.dataset.deleteItem);
     if (!product) return;
-    document.querySelector('#delete-product').elements.id.value = product.id;
+    document.querySelector('#delete-product').elements.namedItem('id').value = product.id;
     document.querySelector('#delete-summary').textContent = 'Delete ' + product.name + '? Stock on hand: ' + stockLabel(product) + '.';
     openPopup('delete-product');
     return;
@@ -551,6 +551,14 @@ document.addEventListener('submit', async event => {
   render();
   message(event.target.id === 'close' ? discrepancy(shift.closed.actual - shift.closed.expected) : action === 'delete-product' ? 'Item deleted.' : 'Saved.');
 });
+window.addEventListener('pageshow', event => {
+  if (!event.persisted) return;
+  user = null;
+  cart.clear();
+  lastSale = null;
+  page = 'Sell';
+  render();
+});
 window.addEventListener('storage', event => {
   if (event.key === staffKey) {
     user = null;
@@ -566,4 +574,4 @@ window.addEventListener('storage', event => {
   message('Records updated from another tab.');
 });
 render();
-if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(console.warn);
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js', {updateViaCache:'none'}).catch(console.warn);
