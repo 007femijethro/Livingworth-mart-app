@@ -1,4 +1,4 @@
-export const initial = () => ({ products: [], sales: [], shifts: [], stock: [] });
+export const initial = () => ({ products: [], sales: [], shifts: [], stock: [], stocktakes: [] });
 export const expected = (state, shift) => shift.opening
   + state.sales.filter(sale => sale.shift === shift.id && sale.method === 'Cash').reduce((sum, sale) => sum + sale.total, 0)
   + shift.moves.reduce((sum, move) => sum + move.amount, 0);
@@ -20,6 +20,16 @@ export function cartLines(state, cart) {
     return { key, id, name: product.name, label: option.label, price: option.price, quantity, units };
   });
 }
+export const receiptNumber = (sale, index) => sale.receiptNumber ?? 'RC-' + String(index + 1).padStart(6, '0');
+
+export function compareStock(product, base, packages) {
+  const counted = base + packages * (product.pack || 1);
+  if (![base, packages, counted].every(value => Number.isSafeInteger(value) && value >= 0)) {
+    throw Error('Enter a valid physical count.');
+  }
+  return {expected:product.quantity, counted, difference:counted - product.quantity};
+}
+
 export function checkout(state, shift, cart, method, at) {
   if (!shift || shift.closed || !cart.size) throw Error('Open a shift and add products first.');
   const lines = cartLines(state, cart);
@@ -28,6 +38,7 @@ export function checkout(state, shift, cart, method, at) {
     state.products.find(p => p.id === line.id).quantity -= line.units;
     state.stock.push({ at, name: line.name, quantity: -line.units, reason: 'Sale · ' + line.quantity + ' × ' + line.label });
   }
+  sale.receiptNumber = receiptNumber(sale, state.sales.length);
   state.sales.push(sale);
   return sale;
 }

@@ -1,5 +1,5 @@
 import { addStarterCatalogue } from './catalogue.mjs';
-import { initial, expected, checkout, sellingOptions, cartLines } from './store.mjs';
+import { initial, expected, checkout, sellingOptions, cartLines, receiptNumber, compareStock } from './store.mjs';
 
 const key = 'rehoboth-v1';
 let state = JSON.parse(localStorage.getItem(key) || 'null') ?? initial();
@@ -26,7 +26,7 @@ async function pinHash(pin, salt) {
 const app = document.querySelector('#app');
 const nav = document.querySelector('nav');
 const notice = document.querySelector('#notice');
-const pages = ['Home', 'Sell', 'Stock', 'Cash Drawer', 'Reports'];
+const pages = ['Home', 'Sell', 'Stock', 'Stocktake', 'Cash Drawer', 'Reports'];
 const methods = ['Cash', 'POS Card', 'Bank Transfer'];
 const clock = new Intl.DateTimeFormat('en-NG', { timeZone: 'Africa/Lagos', dateStyle: 'medium', timeStyle: 'short' });
 const day = new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Lagos' });
@@ -66,13 +66,49 @@ function message(value) {
   timer = setTimeout(() => { notice.textContent = ''; }, 5000);
 }
 
+const saleItems = sale => sale.lines.map(line => line.quantity + ' × ' + line.name + (line.label ? ' (' + line.label + ')' : '')).join(', ');
+const receiptBody = sale => '<p>' + time(sale.at) + ' · ' + escape(sale.method) + (sale.operator ? ' · ' + escape(sale.operator) : '') + '</p>'
+  + (sale.reference ? '<p>Reference ' + escape(sale.reference) + '</p>' : '')
+  + list(sale.lines.map(line => row(escape(line.quantity + ' × ' + line.name + (line.label ? ' · ' + line.label : '')),money(line.price * line.quantity))), '')
+  + row('Total paid',money(sale.total));
+
 function home() {
   const today = state.sales.filter(sale => day.format(new Date(sale.at)) === day.format(new Date()));
   const low = activeProducts().filter(product => product.quantity <= product.low);
   return '<div class="cards">' + metric('Sales today', money(total(today))) + metric('Transactions', today.length) + metric('Low-stock products', low.length) + '</div>'
+    + panel('Receipts', '<label>Find a receipt<input id="receipt-search" type="search" placeholder="Receipt number or product"></label><div id="receipt-results">' + receiptRows() + '</div>')
+    + popup('overview-receipt','Sale receipt','<div id="overview-receipt-body"></div>')
     + panel('Trading shift', '<div class="row"><span class="pill">' + (active() ? 'Shift open' : 'Drawer closed') + '</span><button data-page="' + (active() ? 'Sell">New Sale' : 'Cash Drawer">Open Shift') + '</button></div>')
     + panel('Low stock', list(low.map(product => row(escape(product.name), product.quantity + ' left')), 'No products are below their stock threshold.'))
     + panel('Today by payment method', list(methods.map(method => row(method, money(total(today.filter(sale => sale.method === method))))), ''));
+}
+
+function receiptRows(query = '') {
+  const term = query.trim().toLowerCase();
+  return list(state.sales.map((sale,index) => ({sale,index,number:receiptNumber(sale,index)})).reverse()
+    .filter(({sale,number}) => (number + ' ' + saleItems(sale)).toLowerCase().includes(term)).map(({sale,index,number}) =>
+      '<div class="row"><span><strong>' + escape(number) + '</strong><br><small>' + time(sale.at) + ' · ' + escape(sale.method) + '</small><br>' + escape(saleItems(sale)) + '</span><span class="stock-actions"><strong>' + money(sale.total) + '</strong><button class="secondary" data-receipt-index="' + index + '">View receipt</button></span></div>'), 'No matching receipts.');
+}
+
+function stocktake() {
+  const history = state.stocktakes || [];
+  return panel('Physical stock count','<p>Count an item in the shop and compare it with the app. A difference is saved for review.</p>' + (activeProducts().length ? launch('count-stock','Count an item') : '<p>Add a product in Inventory to begin.</p>'))
+    + (activeProducts().length ? popup('count-stock','Count an item',form('count-stock',selectProduct('productId','Product') + '<p id="count-units"></p><label><span id="count-base-label">Individual units counted</span><input name="base" type="number" min="0" step="1" value="0" required></label><label id="count-pack-field" hidden><span id="count-pack-label">Packages counted</span><input name="packages" type="number" min="0" step="1" value="0" required></label>' + field('note','Note for review',false), 'Save count')) : '')
+    + panel('Count history', list([...history].reverse().map(count => {
+      const status = count.difference === 0 ? 'Matched' : count.difference < 0 ? 'Short by ' + Math.abs(count.difference) : 'Over by ' + count.difference;
+      return row('<strong>' + escape(count.name) + '</strong><br><small>' + time(count.at) + ' · ' + escape(count.operator) + '</small><br>Expected ' + count.expected + ' · Counted ' + count.counted + ' (' + escape(count.unit) + ' units)' + (count.note ? '<br>' + escape(count.note) : ''), '<span class="availability ' + (count.difference ? 'low' : 'ready') + '">' + status + '</span>');
+    }), 'No physical counts recorded yet.'));
+}
+
+function updateCountUnits(editor) {
+  const product = activeProducts().find(item => item.id === editor.elements.productId.value);
+  if (!product) return;
+  const bulk = product.bulkLabel && product.pack > 1;
+  document.querySelector('#count-units').textContent = bulk ? '1 ' + product.bulkLabel.toLowerCase() + ' = ' + product.pack + ' × ' + unitName(product) : '';
+  document.querySelector('#count-base-label').textContent = 'Individual ' + unitName(product) + ' units counted';
+  document.querySelector('#count-pack-label').textContent = product.bulkLabel ? product.bulkLabel + ' count' : 'Package count';
+  document.querySelector('#count-pack-field').hidden = !bulk;
+  editor.elements.packages.disabled = !bulk;
 }
 
 const stockLabel = product => {
@@ -174,7 +210,7 @@ function sell() {
     return '<div class="order-line"><strong>' + escape(line.name) + '</strong><small>' + escape(line.label) + ' · ' + money(line.price) + '</small><div class="row"><div class="stepper"><button aria-label="Remove one ' + escape(line.name + ' ' + line.label) + '" data-remove="' + line.key + '">−</button><span>' + line.quantity + '</span><button aria-label="Add one ' + escape(line.name + ' ' + line.label) + '" data-add="' + line.key + '"' + (increment ? '' : ' disabled') + '>+</button></div><strong>' + money(line.price * line.quantity) + '</strong></div></div>';
   }).join('');
   const payment = '<fieldset class="payment-methods"><legend>Payment method</legend>' + methods.map((method,index) => '<label><input type="radio" name="method" value="' + method + '"' + (index ? '' : ' checked') + '><span>' + method + '</span></label>').join('') + '</fieldset><label id="tender">Cash received (₦)<input name="tender" type="number" min="0" step="0.01" inputmode="decimal" required></label><output id="change"></output><label id="reference" hidden>Terminal or transfer reference<input name="reference" maxlength="150" placeholder="Optional"></label><label id="payment-confirm" class="checkbox" hidden><input type="checkbox" name="confirmed">I checked that payment was received</label>';
-  const receipt = lastSale ? popup('receipt','Sale receipt', '<p>' + escape(lastSale.method) + ' · ' + time(lastSale.at) + '</p>' + list(lastSale.lines.map(line => row(escape(line.quantity + ' × ' + line.name + ' · ' + line.label),money(line.price * line.quantity))), '') + row('Total paid',money(lastSale.total))) : '';
+  const receipt = lastSale ? popup('receipt','Receipt ' + receiptNumber(lastSale,state.sales.indexOf(lastSale)),receiptBody(lastSale)) : '';
   return '<div class="register-bar">' + register + (count ? '<button class="secondary jump-order" data-jump-order>View order · ' + money(due) + '</button>' : '') + '</div>' + waterNotice + '<div class="pos-layout"><section class="catalogue-pane" aria-label="Products"><label class="search-label">Find a product<input id="search" type="search" autocomplete="off" placeholder="Search name or barcode" value="' + escape(sellQuery) + '"></label><div class="departments" aria-label="Product categories">' + departmentsBar + '</div><div id="matches" class="product-grid"></div></section>'
     + '<section id="current-order" class="order-pane" aria-label="Current order" tabindex="-1"><header class="row"><h2>Current order</h2><span class="pill">' + count + (count === 1 ? ' item' : ' items') + '</span></header><div class="order-items">' + (order || '<div class="empty-order"><strong>Your order is empty</strong><p>Select a product to begin.</p></div>') + '</div><footer>' + row('Total due',money(due)) + (lines.length ? launch('payment','Take payment') : '<button disabled>Take payment</button>') + (lastSale ? '<button class="secondary" data-dialog="receipt">Last sale receipt</button>' : '') + '</footer></section></div>'
     + popup('open','Open register',form('open',amount('Opening cash'),'Open register'))
@@ -226,7 +262,7 @@ function reports() {
   return '<div class="toolbar">' + launch('report-date', 'Date · ' + escape(reportDay)) + launch('report-sales','Sales history') + launch('report-shifts','Closed shifts') + launch('report-stock','Stock movements') + '</div>'
     + popup('report-date','Reporting date','<label>Date<input id="report-day" type="date" value="' + escape(reportDay) + '"></label>')
     + '<div class="cards">' + metric('Total sales', money(total(sales))) + methods.map(method => metric(method, money(total(sales.filter(sale => sale.method === method))))).join('') + '</div>'
-    + popup('report-sales','Sales history', list(sales.map(sale => row(escape(sale.lines.map(line => line.quantity + ' × ' + line.name + (line.label ? ' (' + line.label + ')' : '')).join(', ')) + '<br><small>' + time(sale.at) + ' · ' + (sale.operator ? escape(sale.operator) + ' · ' : '') + sale.method + (sale.reference ? ' · Ref ' + escape(sale.reference) : '') + '</small>', money(sale.total))), 'No sales for this date.'))
+    + popup('report-sales','Sales history', list(sales.map(sale => row(escape(receiptNumber(sale,state.sales.indexOf(sale))) + ' · ' + escape(saleItems(sale)) + '<br><small>' + time(sale.at) + ' · ' + (sale.operator ? escape(sale.operator) + ' · ' : '') + sale.method + (sale.reference ? ' · Ref ' + escape(sale.reference) : '') + '</small>', money(sale.total))), 'No sales for this date.'))
     + popup('report-shifts','Closed shifts', list(shifts.map(shift => row(escape(shift.operator) + ' · ' + time(shift.closed.at) + '<br><small>Expected ' + money(shift.closed.expected) + ' · Counted ' + money(shift.closed.actual) + ' · ' + escape(shift.closed.reason) + '</small>', discrepancy(shift.closed.actual - shift.closed.expected))), 'No closed shifts for this date.'))
     + popup('report-stock','Stock movements', list(state.stock.filter(move => onDay(move.at)).map(move => row(escape(move.name) + ' · ' + escape(move.reason), (move.quantity > 0 ? '+' : '') + move.quantity)), 'No stock movements for this date.'));
 }
@@ -252,12 +288,12 @@ function render() {
         + passwordField('password',setup ? 'Choose a password' : 'Password',setup ? 10 : 1), setup ? 'Create admin account' : 'Sign in'));
     return;
   }
-  const allowed = isAdmin() ? ['Sell', ...pages.filter(name => name !== 'Sell'), 'Staff'] : ['Sell','Home','Stock','Cash Drawer'];
+  const allowed = isAdmin() ? ['Sell', ...pages.filter(name => name !== 'Sell'), 'Staff'] : ['Sell','Home','Stock','Stocktake','Cash Drawer'];
   if (!allowed.includes(page)) page = 'Home';
-  const navLabels = {Sell:'Checkout',Home:'Overview',Stock:'Inventory','Cash Drawer':'Register',Reports:'Reports',Staff:'Staff'};
+  const navLabels = {Sell:'Checkout',Home:'Overview',Stock:'Inventory',Stocktake:'Stocktake','Cash Drawer':'Register',Reports:'Reports',Staff:'Staff'};
   nav.innerHTML = allowed.map(name => '<button data-page="' + name + '"' + (page === name ? ' aria-current="page"' : '') + '>' + navLabels[name] + '</button>').join('') + '<button data-signout>Sign out</button>';
   app.innerHTML = '<div class="page-heading"><h1>' + navLabels[page] + '</h1><div class="operator"><span class="operator-initial" aria-hidden="true">' + escape(user.name.charAt(0).toUpperCase()) + '</span><span><strong>' + escape(user.name) + '</strong><small>' + (isAdmin() ? 'Admin' : 'Seller') + '</small></span></div></div>'
-    + ({Home:home, Sell:sell, Stock:stock, 'Cash Drawer':drawer, Reports:reports, Staff:staffPage}[page])();
+    + ({Home:home, Sell:sell, Stock:stock, Stocktake:stocktake, 'Cash Drawer':drawer, Reports:reports, Staff:staffPage}[page])();
   matches();
   fillPricing();
 }
@@ -290,10 +326,20 @@ document.addEventListener('click', event => {
     button.closest('dialog').close();
     return;
   }
+  if (button.dataset.receiptIndex !== undefined) {
+    const index = Number(button.dataset.receiptIndex);
+    const sale = state.sales[index];
+    if (!sale) return;
+    document.querySelector('#title-overview-receipt').textContent = 'Receipt ' + receiptNumber(sale,index);
+    document.querySelector('#overview-receipt-body').innerHTML = receiptBody(sale);
+    openPopup('overview-receipt');
+    return;
+  }
   if (button.dataset.dialog) {
     const id = button.dataset.dialog;
     const editor = document.querySelector('#' + id);
     if (button.dataset.product && editor) editor.elements.id.value = button.dataset.product;
+    if (id === 'count-stock') updateCountUnits(editor);
     if (id === 'pricing') fillPricing();
     if (id === 'merge') previewMerge(editor);
     openPopup(id);
@@ -387,6 +433,7 @@ document.addEventListener('click', event => {
 });
 
 document.addEventListener('input', event => {
+  if (event.target.id === 'receipt-search') document.querySelector('#receipt-results').innerHTML = receiptRows(event.target.value);
   if (event.target.id === 'search') {
     sellQuery = event.target.value;
     matches();
@@ -409,6 +456,12 @@ document.addEventListener('input', event => {
   document.querySelector('#change').textContent = cash && sale.elements.tender.value && tender >= due ? 'Change ' + money(tender - due) : '';
 });
 document.addEventListener('change', event => {
+  const countForm = event.target.form;
+  if (countForm?.getAttribute('id') === 'count-stock' && event.target.name === 'productId') {
+    countForm.elements.base.value = 0;
+    countForm.elements.packages.value = 0;
+    updateCountUnits(countForm);
+  }
   if (event.target.id === 'stock-filter') {
     stockFilter = event.target.value;
     document.querySelector('#stock-results').innerHTML = stockRows();
@@ -578,6 +631,14 @@ document.addEventListener('submit', async event => {
         shift.closed = { at, actual, expected: balance, reason: value('reason'), operator: user.name, operatorId: user.id };
         break;
       }
+      case 'count-stock': {
+        const product = activeProducts().find(item => item.id === value('productId'));
+        if (!product || !value('base')) throw Error('Choose an item and enter the physical count.');
+        const packages = product.bulkLabel && product.pack > 1 ? Number(value('packages')) : 0;
+        const counts = compareStock(product, Number(value('base')), packages);
+        (state.stocktakes ??= []).push({productId:product.id, name:product.name, unit:unitName(product), at, operator:user.name, operatorId:user.id, note:value('note'), ...counts});
+        break;
+      }
       case 'sale': {
         const method = value('method');
         if (method !== 'Cash' && !data.has('confirmed')) throw Error('Confirm payment before completing this sale.');
@@ -604,7 +665,7 @@ document.addEventListener('submit', async event => {
   if (action === 'sale') lastSale = state.sales.at(-1);
   if (['sale','close','adjust','pricing','merge'].includes(action)) cart.clear();
   render();
-  message(action === 'close' ? discrepancy(shift.closed.actual - shift.closed.expected) : action === 'delete-product' ? 'Item deleted.' : action === 'restore-product' ? 'Item restored.' : 'Saved.');
+  message(action === 'close' ? discrepancy(shift.closed.actual - shift.closed.expected) : action === 'delete-product' ? 'Item deleted.' : action === 'restore-product' ? 'Item restored.' : action === 'count-stock' ? 'Count saved for review.' : 'Saved.');
 });
 window.addEventListener('pageshow', event => {
   if (!event.persisted) return;
