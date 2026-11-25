@@ -269,12 +269,13 @@ function stock() {
   const deleted = state.products.filter(product => product.archived && product.deletedStock !== undefined);
   const recovery = list(deleted.map(product => '<div class="row"><span><strong>' + escape(product.name) + '</strong><br><small>' + product.deletedStock + ' base units at deletion</small></span><button data-restore-item="' + product.id + '">Restore</button></div>'), 'No recently deleted items.');
   const adjust = activeProducts().length ? form('adjust', selectProduct('id','Product') + '<label>Movement<select name="kind">' + options(movementKinds) + '</select></label>' + counter('quantity','Quantity') + field('reason','Reason or delivery reference'), 'Save movement') : '<p>Add a product to record a movement.</p>';
+  const receive = activeProducts().length ? popup('receive','Add stock', form('receive', selectProduct('id','Product') + '<label>Count received as<select name="kind">' + options(movementKinds.slice(0,2)) + '</select></label><p class="muted" id="receive-units"></p>' + counter('quantity','Quantity received',1) + field('reason','Delivery reference or note',false), 'Add stock')) : '';
   const setup = activeProducts().length ? popup('pricing','Set selling options', form('pricing', selectProduct('id','Product') + unitField + groupFields + bulkFields, 'Save selling options')) : '';
   const merge = activeProducts().length > 1 ? popup('merge','Combine existing products', form('merge', selectProduct('id','Keep this product (base units)') + selectProduct('source','Convert this product (bags or cartons)') + unitField + groupFields + bulkFields + '<output id="conversion"></output>', 'Combine products')) : '';
-  return '<div class="toolbar">' + launch('product','Add product') + launch('inventory-actions','More actions') + '</div>'
+  return '<div class="toolbar">' + (receive ? launch('receive','Add stock') : '') + launch('product','Add product') + launch('inventory-actions','More actions') + '</div>'
     + popup('inventory-actions','Inventory actions','<div class="action-list">' + launch('adjust','Record stock movement') + (merge ? launch('merge','Combine products') : '') + launch('deleted-items','Deleted items') + '</div>')
     + waterNotice + inventory + details + popup('product','Add product',form('product',field('name','Product name') + field('barcode','Barcode',false) + '<label>Category<select name="category">' + options(categories) + '</select></label>' + unitField + groupFields + bulkFields + counter('quantity','Opening base units') + counter('low','Low-stock threshold in base units'), 'Add product'))
-    + popup('adjust','Record stock movement',adjust) + setup + merge
+    + receive + popup('adjust','Record stock movement',adjust) + setup + merge
     + popup('deleted-items','Deleted items', recovery)
     + popup('restore-product','Restore item','<p id="restore-summary"></p><form id="restore-product"><input type="hidden" name="id"><label class="checkbox"><input type="checkbox" name="restoreStock">Restore the stock recorded at deletion</label><div class="toolbar"><button type="button" class="secondary" data-dismiss>Cancel</button><button type="submit">Restore item</button></div></form>')
     + popup('delete-product','Delete item','<p id="delete-summary"></p><p>It will be removed from Inventory and Checkout. Past sales and stock history will remain in Reports. You can restore it from Deleted items.</p><form id="delete-product"><input type="hidden" name="id"><div class="toolbar"><button type="button" class="secondary" data-dismiss>Cancel</button><button type="submit" class="danger">Delete item</button></div></form>');
@@ -443,6 +444,7 @@ document.addEventListener('click', event => {
       if (button.dataset.countProduct) editor.elements.productId.value = button.dataset.countProduct;
       updateCountUnits(editor);
     }
+    if (id === 'receive') updateReceiveUnits(editor);
     if (id === 'pricing') fillPricing();
     if (id === 'merge') previewMerge(editor);
     openPopup(id);
@@ -475,7 +477,7 @@ document.addEventListener('click', event => {
     const product = activeProducts().find(item => item.id === button.dataset.stockItem);
     if (!product) return;
     document.querySelector('#title-stock-item').textContent = product.name;
-    const actions = isAdmin() ? '<div class="toolbar"><button data-dialog="pricing" data-product="' + product.id + '">Edit selling options</button><button class="secondary" data-dialog="adjust" data-product="' + product.id + '">Record movement</button><button class="danger" data-delete-item="' + product.id + '">Delete item</button></div>' : '';
+    const actions = isAdmin() ? '<div class="toolbar"><button data-dialog="receive" data-product="' + product.id + '">Add stock</button><button class="secondary" data-dialog="pricing" data-product="' + product.id + '">Edit selling options</button><button class="secondary" data-dialog="adjust" data-product="' + product.id + '">Record movement</button><button class="danger" data-delete-item="' + product.id + '">Delete item</button></div>' : '';
     document.querySelector('#stock-details').innerHTML = '<p>' + escape(stockLabel(product)) + '</p>' + list(sellingOptions(product).map(option => row(escape(option.label),money(option.price))), '') + actions;
     openPopup('stock-item');
     return;
@@ -566,12 +568,25 @@ document.addEventListener('input', event => {
   const tender = Math.round(Number(sale.elements.tender.value) * 100);
   document.querySelector('#change').textContent = cash && sale.elements.tender.value && tender >= due ? 'Change ' + money(tender - due) : '';
 });
+function updateReceiveUnits(editor) {
+  const product = activeProducts().find(item => item.id === editor.elements.namedItem('id').value);
+  if (!product) return;
+  const kind = editor.elements.kind;
+  const pack = product.pack || 1;
+  kind.options[1].disabled = pack < 2;
+  if (pack < 2) kind.selectedIndex = 0;
+  document.querySelector('#receive-units').textContent = kind.selectedIndex === 1
+    ? '1 ' + (product.bulkLabel || 'package').toLowerCase() + ' = ' + pack + ' × ' + unitName(product)
+    : 'Counting individual ' + unitName(product) + ' units.';
+}
+
 document.addEventListener('change', event => {
   if (event.target.id === 'count-filter') {
     countFilter = event.target.value;
     document.querySelector('#count-results').innerHTML = countRows();
   }
   const countForm = event.target.form;
+  if (countForm?.getAttribute('id') === 'receive' && ['id','kind'].includes(event.target.name)) updateReceiveUnits(countForm);
   if (countForm?.getAttribute('id') === 'count-stock' && event.target.name === 'productId') {
     countForm.elements.base.value = '';
     countForm.elements.packages.value = 0;
@@ -738,15 +753,20 @@ document.addEventListener('submit', async event => {
         product.quantity = 0;
         break;
       }
+      case 'receive':
       case 'adjust': {
         if (!isAdmin()) throw Error('Admin access is required to change stock.');
-        const product = state.products.find(item => item.id === value('id'));
+        const product = activeProducts().find(item => item.id === value('id'));
         const quantity = Number(value('quantity'));
         const kind = value('kind');
-        const delta = {'Receive units': quantity, 'Receive bulk packages': quantity * product.pack, 'Stock count': quantity - product.quantity, Damage: -quantity, Expiry: -quantity}[kind];
+        if (!product || !value('quantity') || !Number.isSafeInteger(quantity) || quantity < 0) throw Error('Choose a product and enter a valid quantity.');
+        if (action === 'receive' && (quantity < 1 || !movementKinds.slice(0,2).includes(kind) || (kind === 'Receive bulk packages' && !(product.pack > 1)))) throw Error('Enter a positive quantity and a valid receiving unit.');
+        const delta = {'Receive units': quantity, 'Receive bulk packages': quantity * (product.pack || 1), 'Stock count': quantity - product.quantity, Damage: -quantity, Expiry: -quantity}[kind];
+        if (!Number.isSafeInteger(product.quantity + delta)) throw Error('Enter a valid stock movement.');
         if (product.quantity + delta < 0) throw Error('Movement would leave negative stock.');
+        const reason = action === 'receive' ? value('reason') || 'Stock received by ' + user.name : required('reason');
         product.quantity += delta;
-        record(product, delta, kind + (kind === 'Receive bulk packages' ? ' · ' + quantity + ' × ' + (product.bulkLabel || 'package') + ' (' + product.pack + ' base units each)' : '') + ' · ' + required('reason'));
+        record(product, delta, kind + (kind === 'Receive bulk packages' ? ' · ' + quantity + ' × ' + (product.bulkLabel || 'package') + ' (' + product.pack + ' base units each)' : '') + ' · ' + reason);
         break;
       }
       case 'open':
@@ -803,7 +823,7 @@ document.addEventListener('submit', async event => {
   if (action === 'sale') lastSale = state.sales.at(-1);
   if (['sale','close','adjust','pricing','merge'].includes(action)) cart.clear();
   render();
-  message(action === 'close' ? discrepancy(shift.closed.actual - shift.closed.expected) : action === 'delete-product' ? 'Item deleted.' : action === 'restore-product' ? 'Item restored.' : savedCount ? 'Count saved. ' + countStatus(savedCount) + '.' : 'Saved.');
+  message(action === 'close' ? discrepancy(shift.closed.actual - shift.closed.expected) : action === 'delete-product' ? 'Item deleted.' : action === 'restore-product' ? 'Item restored.' : savedCount ? 'Count saved. ' + countStatus(savedCount) + '.' : action === 'receive' ? 'Stock added.' : 'Saved.');
 });
 window.addEventListener('pageshow', event => {
   if (!event.persisted) return;
