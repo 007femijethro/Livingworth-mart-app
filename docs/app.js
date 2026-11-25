@@ -146,11 +146,13 @@ function selectOverviewPeriod(kind,value) {
 
 let countSearch = '';
 let countFilter = 'all';
-function todayCounts() {
+let countPhase = 'opening';
+const countPhaseLabels = {opening:'Opening',closing:'Closing'};
+function todayCounts(phase = countPhase) {
   const today = day.format(new Date());
   const counts = new Map();
   for (const count of state.stocktakes || []) {
-    if (day.format(new Date(count.at)) === today) counts.set(count.productId,count);
+    if (count.phase === phase && day.format(new Date(count.at)) === today) counts.set(count.productId,count);
   }
   return counts;
 }
@@ -175,17 +177,23 @@ function countRows(counts = todayCounts()) {
 function stocktake() {
   const products = activeProducts();
   const counts = todayCounts();
+  const progress = Object.entries(countPhaseLabels).map(([phase,label]) => {
+    const entries = phase === countPhase ? counts : todayCounts(phase);
+    const done = products.filter(product => entries.has(product.id)).length;
+    return '<button class="secondary" data-count-phase="' + phase + '" aria-pressed="' + (countPhase === phase) + '">' + label + ' · ' + done + ' of ' + products.length + ' counted</button>';
+  }).join('');
   const completed = products.filter(product => counts.has(product.id)).length;
   const discrepancies = products.filter(product => counts.get(product.id)?.difference).length;
   const history = state.stocktakes || [];
-  const controls = '<div class="inventory-filters"><label>Find an item<input id="count-search" type="search" placeholder="Product, category or barcode" value="' + escape(countSearch) + '"></label><label>Show<select id="count-filter">' + [['all','All items'],['pending','Not counted today'],['review','Discrepancies today']].map(([key,label]) => '<option value="' + key + '"' + (key === countFilter ? ' selected' : '') + '>' + label + '</option>').join('') + '</select></label></div>';
+  const controls = '<div class="inventory-filters"><label>Find an item<input id="count-search" type="search" placeholder="Product, category or barcode" value="' + escape(countSearch) + '"></label><label>Show<select id="count-filter">' + [['all','All items'],['pending','Not counted'],['review','Discrepancies']].map(([key,label]) => '<option value="' + key + '"' + (key === countFilter ? ' selected' : '') + '>' + label + '</option>').join('') + '</select></label></div>';
   const countForm = form('count-stock',selectProduct('productId','Product') + '<p id="count-units"></p><label><span id="count-base-label">Individual units counted</span><input name="base" type="number" inputmode="numeric" min="0" step="1" required></label><label id="count-pack-field" hidden><span id="count-pack-label">Packages counted</span><input name="packages" type="number" inputmode="numeric" min="0" step="1" value="0" required></label>' + field('note','Note for review',false), 'Save count');
-  return '<div class="cards">' + metric('Counted today',completed + ' of ' + products.length) + metric('Left to count',products.length - completed) + metric('Discrepancies today',discrepancies) + '</div>'
+  return '<section class="overview-period" aria-label="Daily stocktake phase"><div class="toolbar">' + progress + '</div><p class="muted">' + calendarLabel.format(new Date(day.format(new Date()))) + ' · Lagos time</p></section>'
+    + '<div class="cards">' + metric('Counted',completed + ' of ' + products.length) + metric('Left to count',products.length - completed) + metric('Discrepancies',discrepancies) + '</div>'
     + '<div class="toolbar">' + launch('count-history','Count history') + '</div>'
-    + panel('Today’s stocktake', '<p class="muted">Count stock as you find it. Saved counts are compared with inventory and kept for review.</p>' + controls + '<div id="count-results">' + countRows(counts) + '</div>')
-    + popup('count-stock','Physical stock count',countForm)
+    + panel(countPhaseLabels[countPhase] + ' stocktake', '<p class="muted">Count stock as you find it. Saved counts are compared with inventory and kept for review.</p>' + controls + '<div id="count-results">' + countRows(counts) + '</div>')
+    + popup('count-stock',countPhaseLabels[countPhase] + ' stock count',countForm)
     + popup('count-history','Count history',list([...history].reverse().map(count =>
-      row('<strong>' + escape(count.name) + '</strong><br><small>' + time(count.at) + ' · ' + escape(count.operator) + '</small><br>Expected ' + count.expected + ' · Counted ' + count.counted + ' (' + escape(count.unit) + ' units)' + (count.note ? '<br>' + escape(count.note) : ''), '<span class="availability ' + (count.difference ? 'low' : 'ready') + '">' + countStatus(count) + '</span>')
+      row('<strong>' + escape(count.name) + '</strong><br><small>' + time(count.at) + ' · ' + (countPhaseLabels[count.phase] || 'Earlier count') + ' · ' + escape(count.operator) + '</small><br>Expected ' + count.expected + ' · Counted ' + count.counted + ' (' + escape(count.unit) + ' units)' + (count.note ? '<br>' + escape(count.note) : ''), '<span class="availability ' + (count.difference ? 'low' : 'ready') + '">' + countStatus(count) + '</span>')
     ), 'No physical counts recorded yet.'));
 }
 
@@ -414,6 +422,13 @@ document.addEventListener('click', event => {
   }
   if (button.hasAttribute('data-dismiss')) {
     button.closest('dialog').close();
+    return;
+  }
+  if (Object.hasOwn(countPhaseLabels,button.dataset.countPhase)) {
+    countPhase = button.dataset.countPhase;
+    countFilter = 'all';
+    render();
+    document.querySelector('[data-count-phase][aria-pressed="true"]')?.focus();
     return;
   }
   if (button.dataset.overviewPeriod) {
@@ -793,7 +808,7 @@ document.addEventListener('submit', async event => {
         if (!product || !value('base')) throw Error('Choose an item and enter the physical count.');
         const packages = product.bulkLabel && product.pack > 1 ? Number(value('packages')) : 0;
         const counts = compareStock(product, Number(value('base')), packages);
-        (state.stocktakes ??= []).push({productId:product.id, name:product.name, unit:unitName(product), at, operator:user.name, operatorId:user.id, note:value('note'), ...counts});
+        (state.stocktakes ??= []).push({productId:product.id, name:product.name, unit:unitName(product), phase:countPhase, at, operator:user.name, operatorId:user.id, note:value('note'), ...counts});
         break;
       }
       case 'sale': {
@@ -823,7 +838,7 @@ document.addEventListener('submit', async event => {
   if (action === 'sale') lastSale = state.sales.at(-1);
   if (['sale','close','adjust','pricing','merge'].includes(action)) cart.clear();
   render();
-  message(action === 'close' ? discrepancy(shift.closed.actual - shift.closed.expected) : action === 'delete-product' ? 'Item deleted.' : action === 'restore-product' ? 'Item restored.' : savedCount ? 'Count saved. ' + countStatus(savedCount) + '.' : action === 'receive' ? 'Stock added.' : 'Saved.');
+  message(action === 'close' ? discrepancy(shift.closed.actual - shift.closed.expected) : action === 'delete-product' ? 'Item deleted.' : action === 'restore-product' ? 'Item restored.' : savedCount ? countPhaseLabels[savedCount.phase] + ' count saved. ' + countStatus(savedCount) + '.' : action === 'receive' ? 'Stock added.' : 'Saved.');
 });
 window.addEventListener('pageshow', event => {
   if (!event.persisted) return;
