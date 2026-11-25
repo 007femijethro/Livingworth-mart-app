@@ -72,22 +72,76 @@ const receiptBody = sale => '<p>' + time(sale.at) + ' · ' + escape(sale.method)
   + list(sale.lines.map(line => row(escape(line.quantity + ' × ' + line.name + (line.label ? ' · ' + line.label : '')),money(line.price * line.quantity))), '')
   + row('Total paid',money(sale.total));
 
-function home() {
-  const today = state.sales.filter(sale => day.format(new Date(sale.at)) === day.format(new Date()));
-  const low = activeProducts().filter(product => product.quantity <= product.low);
-  return '<div class="cards">' + metric('Sales today', money(total(today))) + metric('Transactions', today.length) + metric('Low-stock products', low.length) + '</div>'
-    + panel('Receipts', '<label>Find a receipt<input id="receipt-search" type="search" placeholder="Receipt number or product"></label><div id="receipt-results">' + receiptRows() + '</div>')
-    + popup('overview-receipt','Sale receipt','<div id="overview-receipt-body"></div>')
-    + panel('Trading shift', '<div class="row"><span class="pill">' + (active() ? 'Shift open' : 'Drawer closed') + '</span><button data-page="' + (active() ? 'Sell">New Sale' : 'Cash Drawer">Open Shift') + '</button></div>')
-    + panel('Low stock', list(low.map(product => row(escape(product.name), product.quantity + ' left')), 'No products are below their stock threshold.'))
-    + panel('Today by payment method', list(methods.map(method => row(method, money(total(today.filter(sale => sale.method === method))))), ''));
+let overviewPeriod = {kind:'today'};
+let receiptQuery = '';
+let receiptLimit = 25;
+const periodLabels = {today:'Today', yesterday:'Yesterday', date:'Date', month:'Month', year:'Year'};
+const calendarLabel = new Intl.DateTimeFormat('en-NG',{timeZone:'UTC', dateStyle:'medium'});
+const monthLabel = new Intl.DateTimeFormat('en-NG',{timeZone:'UTC', month:'long',year:'numeric'});
+const monthNames = Array.from({length:12}, (_,index) => new Intl.DateTimeFormat('en-NG',{timeZone:'UTC',month:'long'}).format(new Date(Date.UTC(2024,index,1))));
+function overviewScope() {
+  const {kind,value} = overviewPeriod;
+  const now = Date.now();
+  const prefix = value ?? day.format(new Date(now - (kind === 'yesterday' ? 86400000 : 0)));
+  const date = new Date(prefix.length === 7 ? prefix + '-01' : prefix);
+  const label = kind === 'year' ? prefix : kind === 'month' ? monthLabel.format(date) : calendarLabel.format(date);
+  return {label, entries:state.sales.map((sale,index) => ({sale,index})).filter(({sale}) => day.format(new Date(sale.at)).startsWith(prefix)).reverse()};
 }
 
-function receiptRows(query = '') {
-  const term = query.trim().toLowerCase();
-  return list(state.sales.map((sale,index) => ({sale,index,number:receiptNumber(sale,index)})).reverse()
-    .filter(({sale,number}) => (number + ' ' + saleItems(sale)).toLowerCase().includes(term)).map(({sale,index,number}) =>
-      '<div class="row"><span><strong>' + escape(number) + '</strong><br><small>' + time(sale.at) + ' · ' + escape(sale.method) + '</small><br>' + escape(saleItems(sale)) + '</span><span class="stock-actions"><strong>' + money(sale.total) + '</strong><button class="secondary" data-receipt-index="' + index + '">View receipt</button></span></div>'), 'No matching receipts.');
+function periodPicker() {
+  const today = day.format(new Date());
+  const selected = overviewPeriod.value || today;
+  const year = selected.slice(0,4);
+  const month = Number(selected.slice(5,7) || today.slice(5,7));
+  const maxYear = today.slice(0,4);
+  const yearInput = '<label>Year<input name="year" type="number" min="1" max="' + maxYear + '" value="' + year + '" required></label>';
+  return popup('overview-date','Choose a date',form('overview-date','<label>Date<input name="date" type="date" max="' + today + '" value="' + (selected.length === 10 ? selected : today) + '" required></label>','Show date'))
+    + popup('overview-month','Choose a month',form('overview-month','<label>Month<select name="month">' + monthNames.map((label,index) => '<option value="' + (index + 1) + '"' + (month === index + 1 ? ' selected' : '') + '>' + label + '</option>').join('') + '</select></label>' + yearInput,'Show month'))
+    + popup('overview-year','Choose a year',form('overview-year',yearInput,'Show year'));
+}
+
+function home() {
+  const {label,entries} = overviewScope();
+  const sales = entries.map(({sale}) => sale);
+  const low = activeProducts().filter(product => product.quantity <= product.low);
+  const productTotals = new Map();
+  for (const sale of sales) {
+    for (const line of sale.lines) {
+      const name = line.name + (line.label ? ' · ' + line.label : '');
+      productTotals.set(name,(productTotals.get(name) || 0) + line.quantity);
+    }
+  }
+  const top = [...productTotals].sort((a,b) => b[1] - a[1]).slice(0,5);
+  const controls = Object.entries(periodLabels).map(([kind,label]) => {
+    const action = kind === 'today' || kind === 'yesterday' ? 'data-overview-period="' + kind + '"' : 'data-dialog="overview-' + kind + '"';
+    return '<button class="secondary" ' + action + ' aria-pressed="' + (overviewPeriod.kind === kind) + '">' + label + '</button>';
+  }).join('');
+  return '<section class="overview-period" aria-label="Overview period"><div class="toolbar">' + controls + '</div><p class="muted">Showing <strong>' + escape(label) + '</strong> · Lagos time</p></section>'
+    + periodPicker()
+    + '<div class="cards">' + metric('Total sales', money(total(sales))) + metric('Transactions', sales.length) + metric('Average sale', money(sales.length ? Math.round(total(sales) / sales.length) : 0)) + '</div>'
+    + '<div class="grid">' + panel('Sales by payment method', list(methods.map(method => row(method, money(total(sales.filter(sale => sale.method === method))))), ''))
+    + panel('Top items by quantity', list(top.map(([name,quantity]) => row(escape(name),quantity)), 'No items sold in this period.')) + '</div>'
+    + panel('Receipts', '<label>Find a receipt<input id="receipt-search" type="search" placeholder="Receipt number or product" value="' + escape(receiptQuery) + '"></label><div id="receipt-results">' + receiptRows(entries) + '</div>')
+    + popup('overview-receipt','Sale receipt','<div id="overview-receipt-body"></div>')
+    + panel('Current trading shift', '<div class="row"><span class="pill">' + (active() ? 'Shift open' : 'Drawer closed') + '</span><button data-page="' + (active() ? 'Sell">New Sale' : 'Cash Drawer">Open Shift') + '</button></div>')
+    + panel('Current low stock', list(low.map(product => row(escape(product.name), product.quantity + ' left')), 'No products are below their stock threshold.'));
+}
+
+function receiptRows(entries = overviewScope().entries) {
+  const term = receiptQuery.trim().toLowerCase();
+  const found = entries.map(({sale,index}) => ({sale,index,number:receiptNumber(sale,index)}))
+    .filter(({sale,number}) => (number + ' ' + saleItems(sale)).toLowerCase().includes(term));
+  return list(found.slice(0,receiptLimit).map(({sale,index,number}) =>
+    '<div class="row"><span><strong>' + escape(number) + '</strong><br><small>' + time(sale.at) + ' · ' + escape(sale.method) + '</small><br>' + escape(saleItems(sale)) + '</span><span class="stock-actions"><strong>' + money(sale.total) + '</strong><button class="secondary" data-receipt-index="' + index + '">View receipt</button></span></div>'), 'No matching receipts for this period.')
+    + (found.length > receiptLimit ? '<button class="secondary" data-more-receipts>Show more receipts</button>' : '');
+}
+
+function selectOverviewPeriod(kind,value) {
+  overviewPeriod = {kind,value};
+  receiptQuery = '';
+  receiptLimit = 25;
+  render();
+  document.querySelector('.overview-period button[aria-pressed="true"]')?.focus();
 }
 
 function stocktake() {
@@ -326,6 +380,16 @@ document.addEventListener('click', event => {
     button.closest('dialog').close();
     return;
   }
+  if (button.dataset.overviewPeriod) {
+    selectOverviewPeriod(button.dataset.overviewPeriod);
+    return;
+  }
+  if (button.hasAttribute('data-more-receipts')) {
+    receiptLimit += 25;
+    document.querySelector('#receipt-results').innerHTML = receiptRows();
+    document.querySelector('[data-more-receipts]')?.focus();
+    return;
+  }
   if (button.dataset.receiptIndex !== undefined) {
     const index = Number(button.dataset.receiptIndex);
     const sale = state.sales[index];
@@ -433,7 +497,11 @@ document.addEventListener('click', event => {
 });
 
 document.addEventListener('input', event => {
-  if (event.target.id === 'receipt-search') document.querySelector('#receipt-results').innerHTML = receiptRows(event.target.value);
+  if (event.target.id === 'receipt-search') {
+    receiptQuery = event.target.value;
+    receiptLimit = 25;
+    document.querySelector('#receipt-results').innerHTML = receiptRows();
+  }
   if (event.target.id === 'search') {
     sellQuery = event.target.value;
     matches();
@@ -527,6 +595,28 @@ document.addEventListener('submit', async event => {
   }
   if (!user) {
     message('Sign in to continue.');
+    return;
+  }
+  if (['overview-date','overview-month','overview-year'].includes(action)) {
+    const kind = action.slice('overview-'.length);
+    const today = day.format(new Date());
+    const year = Number(value('year'));
+    const month = Number(value('month'));
+    if (kind === 'date') {
+      const date = value('date');
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(Date.parse(date)) || date > today) {
+        message('Choose a valid date through today.');
+        return;
+      }
+      selectOverviewPeriod(kind,date);
+      return;
+    }
+    if (!Number.isInteger(year) || year < 1 || year > Number(today.slice(0,4)) || (kind === 'month' && (!Number.isInteger(month) || month < 1 || month > 12))) {
+      message('Choose a valid month or year.');
+      return;
+    }
+    const prefix = String(year).padStart(4,'0');
+    selectOverviewPeriod(kind,kind === 'month' ? prefix + '-' + String(month).padStart(2,'0') : prefix);
     return;
   }
   const previous = structuredClone(state);

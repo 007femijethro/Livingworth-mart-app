@@ -50,3 +50,4 @@ dialog header{background:#f8faff}.dialog-body form>button:last-child{margin-top:
   .inventory-table .stock-actions{justify-content:flex-start}
 }
 @media(max-width:580px){.jump-order{display:inline-block}.page-heading{align-items:flex-start}.product-card{min-height:128px;padding:10px}.operator{max-width:49%}}
+.overview-period{margin-bottom:16px}.overview-period .toolbar{margin:0 0 8px}.overview-period p{margin:0}.overview-period button[aria-pressed=true]{background:var(--primary);color:white}#receipt-results>button{margin-top:10px}
