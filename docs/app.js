@@ -1,12 +1,16 @@
-import { addStarterCatalogue } from './catalogue.mjs';
-import { initial, expected, checkout, sellingOptions, cartLines, receiptNumber, compareStock } from './store.mjs';
+import { addStarterCatalogue } from './catalogue.mjs?v=20';
+import { initial, expected, checkout, sellingOptions, cartLines, receiptNumber, compareStock } from './store.mjs?v=20';
 
 const key = 'rehoboth-v1';
 let state = JSON.parse(localStorage.getItem(key) || 'null') ?? initial();
 const starter = addStarterCatalogue(state);
 if (starter !== state) {
-  localStorage.setItem(key, JSON.stringify(starter));
-  state = starter;
+  try {
+    localStorage.setItem(key, JSON.stringify(starter));
+    state = starter;
+  } catch (error) {
+    console.warn('Could not save the starter catalogue', error);
+  }
 }
 const cart = new Map();
 const adminKey = 'livingworth-admin-v1';
