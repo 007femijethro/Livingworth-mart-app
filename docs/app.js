@@ -120,7 +120,7 @@ function home() {
     const action = kind === 'today' || kind === 'yesterday' ? 'data-overview-period="' + kind + '"' : 'data-dialog="overview-' + kind + '"';
     return '<button class="secondary" ' + action + ' aria-pressed="' + (overviewPeriod.kind === kind) + '">' + label + '</button>';
   }).join('');
-  return '<section class="overview-period" aria-label="Overview period"><div class="toolbar">' + controls + '</div><p class="muted">Showing <strong>' + escape(label) + '</strong> · Lagos time</p></section>'
+  return '<section class="overview-period period-card" aria-label="Overview period"><div><h2>Sales period</h2><p class="muted">' + escape(label) + ' · Lagos time</p></div><div class="toolbar period-controls">' + controls + '</div></section>'
     + periodPicker()
     + '<div class="cards">' + metric('Total sales', money(total(sales))) + metric('Transactions', sales.length) + metric('Average sale', money(sales.length ? Math.round(total(sales) / sales.length) : 0)) + '</div>'
     + '<div class="grid">' + panel('Sales by payment method', list(methods.map(method => row(method, money(total(sales.filter(sale => sale.method === method))))), ''))
@@ -172,7 +172,7 @@ function countRows(counts = todayCounts()) {
   });
   return list(products.map(product => {
     const count = counts.get(product.id);
-    const badge = count ? (count.difference ? 'low' : 'ready') : '';
+    const badge = count ? (count.difference ? 'low' : 'ready') : 'pending';
     const details = count ? '<br><small>Expected ' + count.expected + ' · Counted ' + count.counted + ' ' + escape(count.unit) + ' units</small>' : '';
     return '<div class="row"><span><strong>' + escape(product.name) + '</strong><br><small>' + escape(product.category || 'Other') + '</small>' + details + '</span><span class="stock-actions"><span class="availability ' + badge + '">' + countStatus(count) + '</span><button class="secondary" data-dialog="count-stock" data-count-product="' + product.id + '">' + (count ? 'Recount' : 'Count') + '</button></span></div>';
   }), 'No items match this view.');
@@ -184,16 +184,15 @@ function stocktake() {
   const progress = Object.entries(countPhaseLabels).map(([phase,label]) => {
     const entries = phase === countPhase ? counts : todayCounts(phase);
     const done = products.filter(product => entries.has(product.id)).length;
-    return '<button class="secondary" data-count-phase="' + phase + '" aria-pressed="' + (countPhase === phase) + '">' + label + ' · ' + done + ' of ' + products.length + ' counted</button>';
+    return '<button class="phase-card" data-count-phase="' + phase + '" aria-pressed="' + (countPhase === phase) + '"><strong>' + label + '</strong><span>' + done + ' of ' + products.length + ' counted</span><progress aria-label="' + label + ' stocktake progress" value="' + done + '" max="' + Math.max(1,products.length) + '"></progress></button>';
   }).join('');
   const completed = products.filter(product => counts.has(product.id)).length;
   const discrepancies = products.filter(product => counts.get(product.id)?.difference).length;
   const history = state.stocktakes || [];
   const controls = '<div class="inventory-filters"><label>Find an item<input id="count-search" type="search" placeholder="Product, category or barcode" value="' + escape(countSearch) + '"></label><label>Show<select id="count-filter">' + [['all','All items'],['pending','Not counted'],['review','Discrepancies']].map(([key,label]) => '<option value="' + key + '"' + (key === countFilter ? ' selected' : '') + '>' + label + '</option>').join('') + '</select></label></div>';
   const countForm = form('count-stock',selectProduct('productId','Product') + '<p id="count-units"></p><label><span id="count-base-label">Individual units counted</span><input name="base" type="number" inputmode="numeric" min="0" step="1" required></label><label id="count-pack-field" hidden><span id="count-pack-label">Packages counted</span><input name="packages" type="number" inputmode="numeric" min="0" step="1" value="0" required></label>' + field('note','Note for review',false), 'Save count');
-  return '<section class="overview-period" aria-label="Daily stocktake phase"><div class="toolbar">' + progress + '</div><p class="muted">' + calendarLabel.format(new Date(day.format(new Date()))) + ' · Lagos time</p></section>'
+  return '<section class="stocktake-header" aria-label="Daily stocktake phase"><div class="row"><p class="muted">' + calendarLabel.format(new Date(day.format(new Date()))) + ' · Lagos time</p><button class="secondary" data-dialog="count-history">Count history</button></div><div class="phase-grid">' + progress + '</div></section>'
     + '<div class="cards">' + metric('Counted',completed + ' of ' + products.length) + metric('Left to count',products.length - completed) + metric('Discrepancies',discrepancies) + '</div>'
-    + '<div class="toolbar">' + launch('count-history','Count history') + '</div>'
     + panel(countPhaseLabels[countPhase] + ' stocktake', '<p class="muted">Count stock as you find it. Saved counts are compared with inventory and kept for review.</p>' + controls + '<div id="count-results">' + countRows(counts) + '</div>')
     + popup('count-stock',countPhaseLabels[countPhase] + ' stock count',countForm)
     + popup('count-history','Count history',list([...history].reverse().map(count =>
@@ -384,7 +383,7 @@ function render() {
   if (!user) {
     nav.innerHTML = '';
     const setup = staff().length === 0;
-    app.innerHTML = '<h1>' + (setup ? 'Set up Livingworth Mart' : 'Staff sign-in') + '</h1>' + panel(setup ? 'Create the store admin' : 'Rehoboth Supermarket',
+    app.innerHTML = '<header class="login-heading"><h1>' + (setup ? 'Set up Livingworth Mart' : 'Staff sign-in') + '</h1></header>' + panel(setup ? 'Create the store admin' : 'Rehoboth Supermarket',
       form(setup ? 'setup' : 'login', (setup ? field('name','Admin name') : '') + usernameField()
         + (setup && localStorage.getItem(adminKey) ? passwordField('pin','Existing admin PIN') : '')
         + passwordField('password',setup ? 'Choose a password' : 'Password',setup ? 10 : 1), setup ? 'Create admin account' : 'Sign in'));
@@ -393,7 +392,7 @@ function render() {
   const allowed = isAdmin() ? ['Sell', ...pages.filter(name => name !== 'Sell'), 'Staff'] : ['Sell','Home','Stock','Stocktake','Cash Drawer'];
   if (!allowed.includes(page)) page = 'Home';
   const navLabels = {Sell:'Checkout',Home:'Overview',Stock:'Inventory',Stocktake:'Stocktake','Cash Drawer':'Register',Reports:'Reports',Staff:'Staff'};
-  nav.innerHTML = allowed.map(name => '<button data-page="' + name + '"' + (page === name ? ' aria-current="page"' : '') + '>' + navLabels[name] + '</button>').join('') + '<button data-signout>Sign out</button>';
+  nav.innerHTML = allowed.map(name => '<button data-page="' + name + '"' + (page === name ? ' aria-current="page"' : '') + '>' + navLabels[name] + '</button>').join('') + '<button class="nav-signout" data-signout>Sign out</button>';
   app.innerHTML = '<div class="page-heading"><h1>' + navLabels[page] + '</h1><div class="operator"><span class="operator-initial" aria-hidden="true">' + escape(user.name.charAt(0).toUpperCase()) + '</span><span><strong>' + escape(user.name) + '</strong><small>' + (isAdmin() ? 'Admin' : 'Seller') + '</small></span></div></div>'
     + ({Home:home, Sell:sell, Stock:stock, Stocktake:stocktake, 'Cash Drawer':drawer, Reports:reports, Staff:staffPage}[page])();
   matches();
