@@ -1,6 +1,10 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#173e32"><title>Livingworth Mart · Rehoboth Supermarket</title><link rel="stylesheet" href="style.css?v=20"><link rel="manifest" href="manifest.webmanifest"></head>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#173e32"><title>Livingworth Mart · Rehoboth Supermarket</title><link rel="stylesheet" href="style.css?v=21"><link rel="manifest" href="manifest.webmanifest"></head>
 <body><aside><div class="brand"><strong>Livingworth Mart</strong><span>REHOBOTH SUPERMARKET</span></div><nav aria-label="Main navigation"></nav><small>Single-device pilot</small></aside><main id="app"><section class="panel" aria-labelledby="startup-title"><h1 id="startup-title">Opening Livingworth Mart</h1><p id="startup-message" role="status">Loading the register…</p><button id="startup-retry" type="button" hidden>Try again</button></section></main><div id="notice" role="status"></div><script type="module">
+// Update existing installations without making startup wait for the old worker.
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.getRegistration(location.href).then(registration => registration?.update()).catch(console.warn);
+}
 const status = document.querySelector('#startup-message');
 const retry = document.querySelector('#startup-retry');
 retry.addEventListener('click', () => {
@@ -13,7 +17,7 @@ const timer = setTimeout(() => {
   retry.hidden = false;
 }, 8000);
 try {
-  await import('./app.js?v=20');
+  await import('./app.js?v=21');
 } catch (error) {
   console.error('Livingworth Mart startup failed', error);
   status.textContent = error instanceof SyntaxError && error.message.includes('JSON')

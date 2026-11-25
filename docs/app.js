@@ -1,5 +1,5 @@
-import { addStarterCatalogue } from './catalogue.mjs?v=20';
-import { initial, expected, checkout, sellingOptions, cartLines, receiptNumber, compareStock } from './store.mjs?v=20';
+import { addStarterCatalogue } from './catalogue.mjs?v=21';
+import { initial, expected, checkout, sellingOptions, cartLines, receiptNumber, compareStock } from './store.mjs?v=21';
 
 const key = 'rehoboth-v1';
 let state = JSON.parse(localStorage.getItem(key) || 'null') ?? initial();
@@ -867,4 +867,3 @@ window.addEventListener('storage', event => {
   message('Records updated from another tab.');
 });
 render();
-if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js', {updateViaCache:'none'}).catch(console.warn);
